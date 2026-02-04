@@ -1,0 +1,38 @@
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+permissions:
+  contents: write
+
+env:
+  NIX_CONFIG: experimental-features = nix-command flakes pipe-operators
+
+jobs:
+  main:
+    runs-on: ubuntu-latest
+    container: nixos/nix:latest
+    steps:
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory $(pwd)
+          git clone --depth 1 ${{ github.server_url }}/${{ github.repository }} .
+          git checkout ${{ github.ref }}
+
+      - name: Test
+        run: |
+          nix develop -c gleam test
+
+      - name: Format
+        run: |
+          nix develop -c gleam format src
+          if ! git diff --exit-code >/dev/null; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+            git add .
+            git commit -m 'chore: autoformat'
+            git push https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+          fi
+
