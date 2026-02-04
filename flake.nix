@@ -27,7 +27,7 @@
             buildInputs = with pkgs; [
               gleam
               nodejs
-              erlang_26
+              erlang
               rebar3
               inotify-tools
             ];

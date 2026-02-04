@@ -6,3 +6,7 @@ erl_crash.dump
 
 # Nix
 .direnv/
+
+#Added automatically by Lustre Dev Tools
+/.lustre
+/dist
