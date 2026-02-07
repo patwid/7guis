@@ -31,11 +31,7 @@ type Person {
 
 fn init(_: flags) -> Model {
   Model(
-    people: [
-      Person(firstname: "Hans", lastname: "Emil"),
-      Person(firstname: "Max", lastname: "Mustermann"),
-      Person(firstname: "Roman", lastname: "Tisch"),
-    ],
+    people: [],
     selected: None,
     person: Person(firstname: "", lastname: ""),
     query: "",
