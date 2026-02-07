@@ -1,6 +1,7 @@
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/pair
 import gleam/string
 import lustre
 import lustre/attribute
@@ -98,7 +99,25 @@ fn update(model: Model, msg: Msg) -> Model {
       Model(..model, person: Person(..model.person, lastname:))
 
     UserUpdatedQuery(query) -> {
-      Model(..model, query:)
+      case model.selected {
+        Some(index) -> {
+          let visible_indices =
+            filter_people(model.people, query)
+            |> list.map(pair.first)
+
+          case list.contains(visible_indices, index) {
+            True -> Model(..model, query:)
+            _ ->
+              Model(
+                ..model,
+                selected: None,
+                person: Person(firstname: "", lastname: ""),
+                query:,
+              )
+          }
+        }
+        _ -> Model(..model, query:)
+      }
     }
   }
 }
@@ -169,25 +188,28 @@ fn view_button(
 }
 
 fn view_person_options(model: Model) -> List(Element(Msg)) {
-  model.people
-  |> list.filter(fn(person) {
-    string.starts_with(
-      string.lowercase(person.lastname),
-      string.lowercase(model.query),
-    )
-  })
-  |> list.index_map(fn(person, index) {
-    #(index, person.lastname <> ", " <> person.firstname)
-  })
+  filter_people(model.people, model.query)
   |> list.map(fn(pair) {
-    let #(index, name) = pair
+    let #(index, person) = pair
 
     html.option(
       [
         attribute.value(int.to_string(index)),
         attribute.selected(model.selected == Some(index)),
       ],
-      name,
+      person.lastname <> ", " <> person.firstname,
+    )
+  })
+}
+
+fn filter_people(people: List(Person), query: String) -> List(#(Int, Person)) {
+  people
+  |> list.index_map(fn(person, index) { #(index, person) })
+  |> list.filter(fn(pair) {
+    let #(_, person) = pair
+    string.starts_with(
+      string.lowercase(person.lastname),
+      string.lowercase(query),
     )
   })
 }
