@@ -32,6 +32,7 @@
                 erlang
                 rebar3
                 inotify-tools
+                gnused # CI
                 ;
             };
           };
