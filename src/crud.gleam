@@ -112,6 +112,7 @@ fn view(model: Model) -> Element(Msg) {
     ),
     html.select(
       [
+        attribute.style("width", "15em"),
         attribute.id("person"),
         attribute.attribute("size", "5"),
         event.on_input(fn(value) {
