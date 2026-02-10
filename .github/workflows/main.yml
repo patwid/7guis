@@ -32,15 +32,15 @@ jobs:
             for file in src/*.gleam; do
               task=$(basename "$file" .gleam)
               echo "Building task: $task"
-              nix develop -c gleam run -m lustre/dev build --minify --outdir=dist/$task $task
-              nix develop -c sed -i "s|/$task.js|/7guis/$task/$task.js|" dist/$task/index.html
+              nix develop -c gleam run -m lustre/dev build --minify --outdir=public/$task $task
+              nix develop -c sed -i "s|/$task.js|/7guis/$task/$task.js|" public/$task/index.html
             done
           '
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist
+          path: ./public
 
   deploy:
     environment:
