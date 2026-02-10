@@ -25,8 +25,17 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             -e NIX_CONFIG='experimental-features = nix-command flakes pipe-operators' \
-            nixos/nix:latest \
-            sh -c 'git config --global --add safe.directory $(pwd) && for file in src/*.gleam; do task=$(basename "$file" .gleam); nix develop -c gleam run -m lustre/dev build --minify --outdir=dist/"$task" "$task"; nix develop -c sed -i "s|/$task.js|/7guis/$task/$task.js|" dist/$task/index.html; done'
+          nixos/nix:latest sh -c '
+            set -e
+
+            git config --global --add safe.directory $(pwd)
+            for file in src/*.gleam; do
+              task=$(basename "$file" .gleam)
+              echo "Building task: $task"
+              nix develop -c gleam run -m lustre/dev build --minify --outdir=dist/$task $task
+              nix develop -c sed -i "s|/$task.js|/7guis/$task/$task.js|" dist/$task/index.html
+            done
+          '
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
