@@ -1,7 +1,7 @@
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode.{type DecodeError}
+import gleam/dynamic/decode.{type Decoder}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order.{type Order}
@@ -182,16 +182,16 @@ fn view(model: Model) -> Element(Msg) {
           "click",
           handle_canvas_clicked(
             model,
-            fn(center) { Ok(UserSelectedCircle(center)) },
-            fn(position) { Ok(UserCreatedCircle(position)) },
+            fn(center) { decode.success(UserSelectedCircle(center)) },
+            fn(position) { decode.success(UserCreatedCircle(position)) },
           ),
         ),
-        event.on("contextmenu", fn(event) {
-          event.prevent_default(event)
+        event.on("contextmenu", {
           handle_canvas_clicked(model, handle_circle_context(model), fn(_) {
-            Error([])
-          })(event)
-        }),
+            decode.failure(UserClickedRedo, "")
+          })
+        })
+          |> event.prevent_default,
       ],
       circles(model),
     ),
@@ -210,13 +210,19 @@ fn menu(model: Model) -> Element(Msg) {
   html.dialog(
     [
       attribute.id("menu"),
-      attribute.property("modalopen", model.dialog == Some(Menu)),
+      attribute.property("modalopen", json.bool(model.dialog == Some(Menu))),
       event.on_click(UserClosedMenu),
     ],
     [
-      html.div([event.on("click", handle_stop(Ok(UserOpenedDialog(Dialog))))], [
-        html.text("Adjust diameter.."),
-      ]),
+      html.div(
+        [
+          event.on("click", decode.success(UserOpenedDialog(Dialog)))
+          |> event.stop_propagation,
+        ],
+        [
+          html.text("Adjust diameter.."),
+        ],
+      ),
     ],
   )
 }
@@ -236,35 +242,37 @@ fn dialog(model: Model) -> Element(Msg) {
   html.dialog(
     [
       attribute.id("dialog"),
-      attribute.property("modalopen", model.dialog == Some(Dialog)),
-      event.on("click", fn(event) {
-        let value_decoder = {
-          use value <- decode.subfield(
-            ["target", "firstChild", "lastChild", "value"],
-            decode.string,
-          )
-          decode.success(value)
-        }
+      attribute.property("modalopen", json.bool(model.dialog == Some(Dialog))),
+      event.on("click", {
+        use value <- decode.subfield(
+          ["target", "firstChild", "lastChild", "value"],
+          decode.string,
+        )
 
-        let assert Ok(value) = decode.run(event, value_decoder)
         let assert Ok(radius) = int.parse(value)
-        Ok(UserClosedDialog(radius))
+        decode.success(UserClosedDialog(radius))
       }),
     ],
     [
-      html.label([event.on("click", handle_stop(Error([])))], [
-        html.text(label),
-        html.input([
-          attribute.type_("range"),
-          attribute.min("2"),
-          attribute.max("100"),
-          attribute.value(int.to_string(radius)),
-          event.on_input(fn(value) {
-            let assert Ok(radius) = int.parse(value)
-            UserUpdatedRadius(radius)
-          }),
-        ]),
-      ]),
+      html.label(
+        [
+          event.on("click", decode.failure(UserClickedRedo, ""))
+          |> event.stop_propagation,
+        ],
+        [
+          html.text(label),
+          html.input([
+            attribute.type_("range"),
+            attribute.min("2"),
+            attribute.max("100"),
+            attribute.value(int.to_string(radius)),
+            event.on_input(fn(value) {
+              let assert Ok(radius) = int.parse(value)
+              UserUpdatedRadius(radius)
+            }),
+          ]),
+        ],
+      ),
     ],
   )
 }
@@ -294,56 +302,36 @@ fn circle(selected: Option(Position)) -> fn(Circle) -> Element(Msg) {
   }
 }
 
-fn handle_stop(
-  result: Result(Msg, List(DecodeError)),
-) -> fn(Dynamic) -> Result(Msg, List(DecodeError)) {
-  fn(event) {
-    event.stop_propagation(event)
-    result
-  }
-}
-
-fn handle_circle_context(
-  model: Model,
-) -> fn(Position) -> Result(Msg, List(DecodeError)) {
+fn handle_circle_context(model: Model) -> fn(Position) -> Decoder(Msg) {
   fn(center) {
     case model.selected {
-      Some(selected) if center == selected -> Ok(UserOpenedDialog(Menu))
-      _ -> Error([])
+      Some(selected) if center == selected ->
+        decode.success(UserOpenedDialog(Menu))
+      _ -> decode.failure(UserClickedRedo, "")
     }
   }
 }
 
 fn handle_canvas_clicked(
   model: Model,
-  circle_msg: fn(Position) -> Result(Msg, List(DecodeError)),
-  empty_msg: fn(Position) -> Result(Msg, List(DecodeError)),
-) -> fn(Dynamic) -> Result(Msg, List(DecodeError)) {
-  fn(event) {
-    let assert Ok(position) = mouse_offset(event)
+  circle_msg: fn(Position) -> Decoder(Msg),
+  empty_msg: fn(Position) -> Decoder(Msg),
+) -> Decoder(Msg) {
+  use x <- decode.field("offsetX", decode.int)
+  use y <- decode.field("offsetY", decode.int)
+  let position = #(x, y)
 
-    let circle =
-      model.present
-      |> dict.filter(is_inside_circle(position))
-      |> dict.to_list
-      |> list.sort(min_distance(position))
-      |> list.first
+  let circle =
+    model.present
+    |> dict.filter(is_inside_circle(position))
+    |> dict.to_list
+    |> list.sort(min_distance(position))
+    |> list.first
 
-    case circle {
-      Ok(#(center, _)) -> circle_msg(center)
-      Error(_) -> empty_msg(position)
-    }
+  case circle {
+    Ok(#(center, _)) -> circle_msg(center)
+    Error(_) -> empty_msg(position)
   }
-}
-
-fn mouse_offset(event: Dynamic) -> Result(Position, List(DecodeError)) {
-  let decoder = {
-    use x <- decode.field("offsetX", decode.int)
-    use y <- decode.field("offsetY", decode.int)
-    decode.success(#(x, y))
-  }
-
-  decode.run(event, decoder)
 }
 
 fn is_inside_circle(position: Position) -> fn(Position, Int) -> Bool {
