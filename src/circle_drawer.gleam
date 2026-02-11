@@ -186,11 +186,12 @@ fn view(model: Model) -> Element(Msg) {
             fn(position) { decode.success(UserCreatedCircle(position)) },
           ),
         ),
-        event.on("contextmenu", {
+        event.on(
+          "contextmenu",
           handle_canvas_clicked(model, handle_circle_context(model), fn(_) {
             decode.failure(UserClickedRedo, "")
-          })
-        })
+          }),
+        )
           |> event.prevent_default,
       ],
       circles(model),
