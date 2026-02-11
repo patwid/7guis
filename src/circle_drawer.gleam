@@ -322,17 +322,14 @@ fn handle_canvas_clicked(
   use y <- decode.field("offsetY", decode.int)
   let position = #(x, y)
 
-  let circle =
-    model.present
-    |> dict.filter(is_inside_circle(position))
-    |> dict.to_list
-    |> list.sort(min_distance(position))
-    |> list.first
-
-  case circle {
-    Ok(#(center, _)) -> circle_msg(center)
-    Error(_) -> empty_msg(position)
-  }
+  model.present
+  |> dict.filter(is_inside_circle(position))
+  |> dict.to_list
+  |> list.sort(min_distance(position))
+  |> list.first
+  |> result.map(pair.first)
+  |> result.map(circle_msg)
+  |> result.unwrap(empty_msg(position))
 }
 
 fn is_inside_circle(position: Position) -> fn(Position, Int) -> Bool {
