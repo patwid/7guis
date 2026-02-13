@@ -43,7 +43,7 @@ type Position =
 
 type Dialog {
   Menu
-  Dialog
+  Slider(Int)
 }
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
@@ -73,7 +73,7 @@ type Msg {
   UserOpenedDialog(Dialog)
   UserClosedMenu
   UserUpdatedRadius(Int)
-  UserClosedDialog(Int)
+  UserClosedDialog
   UserClickedUndo
   UserClickedRedo
 }
@@ -130,26 +130,32 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     UserUpdatedRadius(radius) -> {
       let assert Some(center) = model.selected
 
-      #(model, update_radius(format_circle_id(center), radius))
+      #(
+        Model(..model, present: dict.insert(model.present, center, radius)),
+        effect.none(),
+      )
     }
 
-    UserClosedDialog(new_radius) -> {
+    UserClosedDialog -> {
       let assert Some(center) = model.selected
-      let assert Ok(radius) = dict.get(model.present, center)
+      let assert Some(Slider(original_radius)) = model.dialog
+      let assert Ok(current_radius) = dict.get(model.present, center)
 
-      #(Model(..model, selected: None, dialog: None), effect.none())
-      |> pair.map_first(fn(new_model) {
-        case new_radius == radius {
-          True -> new_model
-          False ->
-            Model(
-              ..new_model,
-              past: [model.present, ..model.past],
-              present: dict.upsert(model.present, center, fn(_) { new_radius }),
-              future: [],
-            )
-        }
-      })
+      let new_model = Model(..model, selected: None, dialog: None)
+      case current_radius == original_radius {
+        True -> #(new_model, effect.none())
+        False -> #(
+          Model(
+            ..new_model,
+            past: [
+              dict.insert(model.present, center, original_radius),
+              ..model.past
+            ],
+            future: [],
+          ),
+          effect.none(),
+        )
+      }
     }
 
     UserClickedUndo -> {
@@ -183,13 +189,6 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
   }
 }
-
-fn update_radius(id: String, radius: Int) -> Effect(Msg) {
-  effect.from(fn(_) { do_update_radius(id, radius) })
-}
-
-@external(javascript, "./circle_drawer.ffi.mjs", "update_radius")
-fn do_update_radius(id: String, radius: Int) -> Nil
 
 fn view(model: Model) -> Element(Msg) {
   html.div([], [
@@ -229,7 +228,14 @@ fn menu(model: Model) -> Element(Msg) {
     [
       html.div(
         [
-          event.on("click", decode.success(UserOpenedDialog(Dialog)))
+          event.on("click", {
+            let radius = case model.selected {
+              Some(center) ->
+                dict.get(model.present, center) |> result.unwrap(0)
+              None -> 0
+            }
+            decode.success(UserOpenedDialog(Slider(radius)))
+          })
           |> event.stop_propagation,
         ],
         [
@@ -255,16 +261,14 @@ fn dialog(model: Model) -> Element(Msg) {
   html.dialog(
     [
       attribute.id("dialog"),
-      attribute.property("modalopen", json.bool(model.dialog == Some(Dialog))),
-      event.on("click", {
-        use value <- decode.subfield(
-          ["target", "firstChild", "lastChild", "value"],
-          decode.string,
-        )
-
-        let assert Ok(radius) = int.parse(value)
-        decode.success(UserClosedDialog(radius))
-      }),
+      attribute.property(
+        "modalopen",
+        json.bool(case model.dialog {
+          Some(Slider(_)) -> True
+          _ -> False
+        }),
+      ),
+      event.on_click(UserClosedDialog),
     ],
     [
       html.label(
