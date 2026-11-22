@@ -1,10 +1,11 @@
+import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/list
 import gleam/order
 import gleam/pair
 import gleam/result
 import gleam/string
-import gleam/time/calendar
+import gleam/time/calendar.{type Date}
 import gleam/time/timestamp
 import lustre
 import lustre/attribute
@@ -19,8 +20,10 @@ pub fn main() {
   Nil
 }
 
+/// The date fields hold the text exactly as typed; dates are parsed from it
+/// on demand, so the user's input is never reformatted while typing.
 type Model {
-  Model(flight: Flight, start: Value, return: Value)
+  Model(flight: Flight, start: String, return: String)
 }
 
 type Flight {
@@ -28,29 +31,45 @@ type Flight {
   Return
 }
 
-type Value {
-  Date(calendar.Date)
-  Text(String)
+/// A booking that passed validation.
+type Booking {
+  OneWayBooking(date: Date)
+  ReturnBooking(start: Date, return: Date)
 }
 
 fn init(_: flags) -> Model {
   let #(today, _) =
     timestamp.system_time() |> timestamp.to_calendar(calendar.utc_offset)
+  let today = format_date(today)
 
-  Model(OneWay, Date(today), Date(today))
+  Model(flight: OneWay, start: today, return: today)
 }
 
 type Msg {
   UserSelectedFlight(Flight)
-  UserUpdatedStart(Value)
-  UserUpdatedReturn(Value)
+  UserUpdatedStart(String)
+  UserUpdatedReturn(String)
 }
 
 fn update(model: Model, msg: Msg) -> Model {
   case msg {
-    UserSelectedFlight(flight) -> Model(..model, flight: flight)
-    UserUpdatedStart(start) -> Model(..model, start: start)
-    UserUpdatedReturn(return) -> Model(..model, return: return)
+    UserSelectedFlight(flight) -> Model(..model, flight:)
+    UserUpdatedStart(start) -> Model(..model, start:)
+    UserUpdatedReturn(return) -> Model(..model, return:)
+  }
+}
+
+fn booking(model: Model) -> Result(Booking, Nil) {
+  use start <- result.try(parse_date(model.start))
+  case model.flight {
+    OneWay -> Ok(OneWayBooking(start))
+    Return -> {
+      use return <- result.try(parse_date(model.return))
+      case calendar.naive_date_compare(start, return) {
+        order.Gt -> Error(Nil)
+        order.Lt | order.Eq -> Ok(ReturnBooking(start:, return:))
+      }
+    }
   }
 }
 
@@ -62,15 +81,10 @@ fn view(model: Model) -> Element(Msg) {
       html.option([attribute.value(value)], value <> " flight")
     })
 
-  let booking =
-    "You have booked a "
-    <> format_flight(model.flight)
-    <> " flight "
-    <> format_details(model)
-    <> "."
+  let booking = booking(model)
 
   html.div([attribute.class("column")], [
-    html.select([event.on_input(handle_flight_selected)], flight_options),
+    html.select([event.on("input", flight_decoder())], flight_options),
     view_date_input(
       value: model.start,
       disabled: False,
@@ -83,63 +97,48 @@ fn view(model: Model) -> Element(Msg) {
     ),
     html.button(
       [
-        attribute.disabled(!is_valid_booking(model)),
+        attribute.disabled(result.is_error(booking)),
         attribute.attribute("popovertarget", "booking"),
       ],
       [html.text("Book")],
     ),
     html.div([attribute.id("booking"), attribute.attribute("popover", "")], [
-      html.text(booking),
+      html.text(case booking {
+        Ok(booking) -> format_booking(booking)
+        Error(_) -> ""
+      }),
     ]),
   ])
 }
 
 fn view_date_input(
-  value value: Value,
+  value value: String,
   disabled disabled: Bool,
-  on_input handle_input: fn(Value) -> Msg,
+  on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
-  let styles = case is_date(value) {
-    False if !disabled -> [#("background", "lightcoral")]
-    _ -> []
+  let styles = case parse_date(value), disabled {
+    Error(_), False -> [#("background", "lightcoral")]
+    _, _ -> []
   }
 
   html.input([
     attribute.styles(styles),
-    attribute.value(format_value(value)),
+    attribute.value(value),
     attribute.disabled(disabled),
-    event.on_input(fn(s) { parse_date(s) |> handle_input }),
+    event.on_input(handle_input),
   ])
 }
 
-fn handle_flight_selected(value: String) -> Msg {
-  let assert Ok(flight) = flight_from_string(value)
-  UserSelectedFlight(flight)
-}
-
-fn is_valid_booking(model: Model) -> Bool {
-  case model.flight {
-    Return -> is_valid_return(model)
-    OneWay -> is_date(model.start)
+fn flight_decoder() -> Decoder(Msg) {
+  use value <- decode.subfield(["target", "value"], decode.string)
+  case flight_from_string(value) {
+    Ok(flight) -> decode.success(UserSelectedFlight(flight))
+    Error(_) -> decode.failure(UserSelectedFlight(OneWay), "flight")
   }
 }
 
-fn is_valid_return(model: Model) -> Bool {
-  case model.start, model.return {
-    Date(start), Date(return) ->
-      calendar.naive_date_compare(start, return) != order.Gt
-    _, _ -> False
-  }
-}
-
-fn is_date(value: Value) -> Bool {
-  case value {
-    Date(_) -> True
-    Text(_) -> False
-  }
-}
-
-fn parse_date(value: String) -> Value {
+/// Parses dates in the form `d.m.yyyy`.
+fn parse_date(value: String) -> Result(Date, Nil) {
   case string.split(value, ".") {
     [day, month, year] ->
       timestamp.parse_rfc3339(
@@ -152,32 +151,33 @@ fn parse_date(value: String) -> Value {
       )
       |> result.map(timestamp.to_calendar(_, calendar.utc_offset))
       |> result.map(pair.first)
-      |> result.map(Date)
-      |> result.unwrap(Text(value))
-    _ -> Text(value)
+    _ -> Error(Nil)
   }
 }
 
-fn format_details(model: Model) -> String {
-  case model {
-    Model(OneWay, start, _) -> "on " <> format_value(start)
-    Model(Return, start, return) ->
-      "from " <> format_value(start) <> " to " <> format_value(return)
+fn format_booking(booking: Booking) -> String {
+  let details = case booking {
+    OneWayBooking(date) -> "one-way flight on " <> format_date(date)
+    ReturnBooking(start, return) ->
+      "return flight from "
+      <> format_date(start)
+      <> " to "
+      <> format_date(return)
   }
+
+  "You have booked a " <> details <> "."
 }
 
-fn format_value(value: Value) -> String {
-  case value {
-    Date(calendar.Date(year, month, day)) ->
-      string.pad_start(int.to_string(day), to: 2, with: "0")
-      <> "."
-      <> calendar.month_to_int(month)
-      |> int.to_string
-      |> string.pad_start(to: 2, with: "0")
-      <> "."
-      <> int.to_string(year)
-    Text(text) -> text
-  }
+fn format_date(date: Date) -> String {
+  let calendar.Date(year, month, day) = date
+
+  string.pad_start(int.to_string(day), to: 2, with: "0")
+  <> "."
+  <> calendar.month_to_int(month)
+  |> int.to_string
+  |> string.pad_start(to: 2, with: "0")
+  <> "."
+  <> int.to_string(year)
 }
 
 fn format_flight(flight: Flight) -> String {
