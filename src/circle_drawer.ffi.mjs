@@ -13,8 +13,3 @@ export function init_dialog() {
     }
   })
 }
-
-export function update_radius(id, value) {
-  requestAnimationFrame(() =>
-    document.getElementById(id).setAttribute("r", value.toString()))
-}
