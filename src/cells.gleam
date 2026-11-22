@@ -761,7 +761,7 @@ fn view(model: Model) -> Element(Msg) {
     [
       attribute.styles([
         #("width", "100%"),
-        #("height", "100vh"),
+        #("height", "calc(100vh - 2rem)"),
         #("overflow", "auto"),
         #("font-family", "monospace"),
         #("font-size", "13px"),

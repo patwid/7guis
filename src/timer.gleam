@@ -50,10 +50,17 @@ fn view(model: Model) -> Element(Msg) {
   let duration = model.duration |> int.to_string
   let time = int.min(model.elapsed, model.duration) |> format_time
 
-  html.div([], [
+  html.div([attribute.class("column")], [
     html.label([], [
       html.text("Elapsed Time:"),
-      html.progress([attribute.max(duration), attribute.value(elapsed)], []),
+      html.progress(
+        [
+          attribute.styles([#("width", "15em")]),
+          attribute.max(duration),
+          attribute.value(elapsed),
+        ],
+        [],
+      ),
     ]),
     html.text(time),
     html.label([], [

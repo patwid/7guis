@@ -69,7 +69,7 @@ fn view(model: Model) -> Element(Msg) {
     <> format_details(model)
     <> "."
 
-  html.div([], [
+  html.div([attribute.class("column")], [
     html.select([event.on_input(handle_flight_selected)], flight_options),
     view_date_input(
       value: model.start,
@@ -100,11 +100,7 @@ fn view_date_input(
   on_input handle_input: fn(Value) -> Msg,
 ) -> Element(Msg) {
   let styles = case is_date(value) {
-    False if !disabled -> [
-      #("outline", "none"),
-      #("border", "2px solid red"),
-      #("border-radius", "0.2rem"),
-    ]
+    False if !disabled -> [#("background", "lightcoral")]
     _ -> []
   }
 

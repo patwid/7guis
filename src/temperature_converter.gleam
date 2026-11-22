@@ -71,7 +71,7 @@ fn to_fahrenheit(celsius: Int) -> Int {
 fn view(model: Model) -> Element(Msg) {
   let #(celsius, fahrenheit) = model
 
-  html.div([], [
+  html.div([attribute.class("row")], [
     view_temperature_input(
       value: celsius,
       label: "Celsius",
@@ -92,8 +92,9 @@ fn view_temperature_input(
   on_input handle_input: fn(Temperature(unit)) -> Msg,
 ) -> Element(Msg) {
   let styles = case temperature {
-    Number(_) | Text("") -> []
+    Number(_) | Text("") -> [#("width", "6em")]
     Text(_) -> [
+      #("width", "6em"),
       #("outline", "none"),
       #("border", "2px solid red"),
       #("border-radius", "0.2em"),

@@ -191,12 +191,14 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 }
 
 fn view(model: Model) -> Element(Msg) {
-  html.div([], [
-    button("Undo", UserClickedUndo, list.is_empty(model.past)),
-    button("Redo", UserClickedRedo, list.is_empty(model.future)),
+  html.div([attribute.class("column")], [
+    html.div([attribute.class("row")], [
+      button("Undo", UserClickedUndo, list.is_empty(model.past)),
+      button("Redo", UserClickedRedo, list.is_empty(model.future)),
+    ]),
     svg.svg(
       [
-        attribute.styles([#("outline", "1px solid")]),
+        attribute.styles([#("outline", "1px solid"), #("display", "block")]),
         attribute.attribute("width", "500"),
         attribute.attribute("height", "500"),
         event.on("mousemove", handle_mouse_move()),

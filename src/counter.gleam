@@ -32,9 +32,10 @@ fn update(model: Model, msg: Msg) -> Model {
 fn view(model: Model) -> Element(Msg) {
   let count = int.to_string(model)
 
-  html.div([], [
+  html.div([attribute.class("row")], [
     html.input([
       attribute.type_("number"),
+      attribute.styles([#("width", "5em")]),
       attribute.value(count),
       attribute.readonly(True),
     ]),

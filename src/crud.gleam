@@ -104,12 +104,13 @@ fn update(model: Model, msg: Msg) -> Model {
 fn view(model: Model) -> Element(Msg) {
   let selected = option.is_some(model.selected)
 
-  html.div([], [
+  html.div([attribute.class("column")], [
     view_input(
       value: model.query,
       label: "Filter prefix:",
       on_input: UserUpdatedQuery,
     ),
+    html.div([attribute.class("row"), attribute.style("align-items", "flex-start")], [
     html.select(
       [
         attribute.style("width", "15em"),
@@ -122,27 +123,32 @@ fn view(model: Model) -> Element(Msg) {
       ],
       view_person_options(model),
     ),
-    view_input(
-      value: model.person.firstname,
-      label: "Name:",
-      on_input: UserUpdatedFirstname,
-    ),
-    view_input(
-      value: model.person.lastname,
-      label: "Surname:",
-      on_input: UserUpdatedLastname,
-    ),
-    view_button(label: "Create", on_click: UserCreatedPerson, disabled: False),
-    view_button(
-      label: "Update",
-      on_click: UserUpdatedPerson,
-      disabled: !selected,
-    ),
-    view_button(
-      label: "Delete",
-      on_click: UserDeletedPerson,
-      disabled: !selected,
-    ),
+    html.div([attribute.class("column")], [
+      view_input(
+        value: model.person.firstname,
+        label: "Name:",
+        on_input: UserUpdatedFirstname,
+      ),
+      view_input(
+        value: model.person.lastname,
+        label: "Surname:",
+        on_input: UserUpdatedLastname,
+      ),
+    ]),
+    ]),
+    html.div([attribute.class("row")], [
+      view_button(label: "Create", on_click: UserCreatedPerson, disabled: False),
+      view_button(
+        label: "Update",
+        on_click: UserUpdatedPerson,
+        disabled: !selected,
+      ),
+      view_button(
+        label: "Delete",
+        on_click: UserDeletedPerson,
+        disabled: !selected,
+      ),
+    ]),
   ])
 }
 
