@@ -20,17 +20,43 @@ const num_rows = 100
 
 // --- Types ---
 
+/// A cell coordinate. Only construct through `cell_ref`, which guarantees
+/// the coordinate lies within the sheet.
 type CellRef {
   CellRef(col: Int, row: Int)
 }
 
-type Formula {
-  FEmpty
-  FNumber(Float)
-  FText(String)
-  FRef(CellRef)
-  FRange(CellRef, CellRef)
-  FCall(String, List(Formula))
+/// What the user entered into a cell, after parsing.
+type Content {
+  Blank
+  Number(Float)
+  Text(String)
+  Formula(Expr)
+  Malformed
+}
+
+/// The expression of a formula (the part after `=`).
+type Expr {
+  Literal(Float)
+  Ref(CellRef)
+  Call(Function, List(Arg))
+}
+
+/// A function argument. Ranges are only meaningful as arguments, so they are
+/// not an `Expr`.
+type Arg {
+  Single(Expr)
+  Range(CellRef, CellRef)
+}
+
+type Function {
+  Add
+  Sub
+  Mul
+  Div
+  Mod
+  Sum
+  Prod
 }
 
 type Value {
@@ -47,26 +73,39 @@ type CellError {
   DivByZero
 }
 
+/// A non-blank cell. `value` is a cache of evaluating `content`, kept up to
+/// date by `recalculate`.
 type Cell {
-  Cell(raw: String, formula: Result(Formula, Nil), value: Value)
+  Cell(raw: String, content: Content, value: Value)
 }
 
 type Model {
-  Model(
-    cells: Dict(CellRef, Cell),
-    deps: Dict(CellRef, Set(CellRef)),
-    editing: Option(CellRef),
-    edit_text: String,
-  )
+  Model(cells: Dict(CellRef, Cell), editor: Option(Editor))
+}
+
+type Editor {
+  Editor(ref: CellRef, text: String)
+}
+
+type Direction {
+  Forward
+  Backward
 }
 
 type Msg {
   UserDoubleClickedCell(CellRef)
-  UserClickedCell(CellRef)
+  UserClickedCell
   UserUpdatedFormula(String)
   UserFinishedEditing
   UserCancelledEditing
-  UserPressedTab(Bool)
+  UserPressedTab(Direction)
+}
+
+fn cell_ref(col: Int, row: Int) -> Result(CellRef, Nil) {
+  case col >= 0 && col < num_cols && row >= 0 && row < num_rows {
+    True -> Ok(CellRef(col:, row:))
+    False -> Error(Nil)
+  }
 }
 
 // --- Main / Init ---
@@ -79,15 +118,12 @@ pub fn main() {
 }
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
-  #(
-    Model(cells: dict.new(), deps: dict.new(), editing: None, edit_text: ""),
-    effect.none(),
-  )
+  #(Model(cells: dict.new(), editor: None), effect.none())
 }
 
 // --- FFI ---
 
-fn focus_input() -> Effect(Msg) {
+fn focus_editor() -> Effect(Msg) {
   effect.from(fn(_) { do_focus_cell_editor() })
 }
 
@@ -98,127 +134,146 @@ fn do_focus_cell_editor() -> Nil
 
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
-    UserDoubleClickedCell(ref) -> {
-      let model = commit_current_edit(model)
-      let raw = case dict.get(model.cells, ref) {
-        Ok(cell) -> cell.raw
-        Error(_) -> ""
-      }
-      #(Model(..model, editing: Some(ref), edit_text: raw), focus_input())
-    }
-
-    UserClickedCell(_ref) -> {
-      let model = commit_current_edit(model)
-      #(Model(..model, editing: None, edit_text: ""), effect.none())
-    }
-
-    UserUpdatedFormula(text) -> #(
-      Model(..model, edit_text: text),
-      effect.none(),
+    UserDoubleClickedCell(ref) -> #(
+      model |> close_editor(commit: True) |> open_editor(ref),
+      focus_editor(),
     )
 
-    UserFinishedEditing -> {
-      let model = commit_current_edit(model)
-      #(Model(..model, editing: None, edit_text: ""), effect.none())
+    UserClickedCell -> #(close_editor(model, commit: True), effect.none())
+
+    UserUpdatedFormula(text) -> {
+      let editor =
+        option.map(model.editor, fn(editor) { Editor(..editor, text:) })
+      #(Model(..model, editor:), effect.none())
     }
 
-    UserCancelledEditing -> #(
-      Model(..model, editing: None, edit_text: ""),
-      effect.none(),
-    )
+    UserFinishedEditing -> #(close_editor(model, commit: True), effect.none())
 
-    UserPressedTab(shift) -> {
-      case model.editing {
+    UserCancelledEditing -> #(close_editor(model, commit: False), effect.none())
+
+    UserPressedTab(direction) ->
+      case model.editor {
         None -> #(model, effect.none())
-        Some(ref) -> {
-          let model = commit_current_edit(model)
-          let next = next_cell(ref, shift)
-          let raw = case dict.get(model.cells, next) {
-            Ok(cell) -> cell.raw
-            Error(_) -> ""
-          }
-          #(Model(..model, editing: Some(next), edit_text: raw), focus_input())
-        }
-      }
-    }
-  }
-}
-
-fn next_cell(ref: CellRef, shift: Bool) -> CellRef {
-  case shift {
-    False ->
-      case ref.col < num_cols - 1 {
-        True -> CellRef(ref.col + 1, ref.row)
-        False ->
-          case ref.row < num_rows - 1 {
-            True -> CellRef(0, ref.row + 1)
-            False -> CellRef(0, 0)
-          }
-      }
-    True ->
-      case ref.col > 0 {
-        True -> CellRef(ref.col - 1, ref.row)
-        False ->
-          case ref.row > 0 {
-            True -> CellRef(num_cols - 1, ref.row - 1)
-            False -> CellRef(num_cols - 1, num_rows - 1)
-          }
+        Some(editor) -> #(
+          model
+            |> close_editor(commit: True)
+            |> open_editor(next_cell(editor.ref, direction)),
+          focus_editor(),
+        )
       }
   }
 }
 
-fn commit_current_edit(model: Model) -> Model {
-  case model.editing {
-    None -> model
-    Some(ref) -> commit_edit(model, ref, model.edit_text)
+fn open_editor(model: Model, ref: CellRef) -> Model {
+  let text = case dict.get(model.cells, ref) {
+    Ok(cell) -> cell.raw
+    Error(_) -> ""
+  }
+
+  Model(..model, editor: Some(Editor(ref:, text:)))
+}
+
+fn close_editor(model: Model, commit commit: Bool) -> Model {
+  case model.editor, commit {
+    Some(Editor(ref:, text:)), True ->
+      Model(cells: set_cell(model.cells, ref, text), editor: None)
+    _, _ -> Model(..model, editor: None)
   }
 }
 
-// --- Commit Edit (orchestrator) ---
-
-fn commit_edit(model: Model, ref: CellRef, raw: String) -> Model {
-  let formula = parse_formula(raw)
-  let refs = case formula {
-    Ok(f) -> formula_refs(f)
-    Error(_) -> set.new()
+/// Moves through the sheet in row-major order, wrapping around at the ends.
+fn next_cell(ref: CellRef, direction: Direction) -> CellRef {
+  let total = num_cols * num_rows
+  let index = ref.row * num_cols + ref.col
+  let next = case direction {
+    Forward -> { index + 1 } % total
+    Backward -> { index - 1 + total } % total
   }
 
-  // Update deps
-  let deps = dict.insert(model.deps, ref, refs)
+  CellRef(col: next % num_cols, row: next / num_cols)
+}
 
-  // Check for cycles
-  let has_circ = has_cycle(ref, refs, deps, set.new())
+// --- Sheet ---
 
-  let value = case has_circ {
-    True -> VError(CircularRef)
-    False ->
-      case formula {
-        Ok(f) -> evaluate(f, model.cells)
-        Error(_) -> VError(ParseError)
-      }
+fn set_cell(cells: Dict(CellRef, Cell), ref: CellRef, raw: String) {
+  let cells = case parse_content(raw) {
+    Blank -> dict.delete(cells, ref)
+    content -> dict.insert(cells, ref, Cell(raw:, content:, value: VEmpty))
   }
 
-  let cell = Cell(raw: raw, formula: formula, value: value)
-  let cells = dict.insert(model.cells, ref, cell)
-  let model = Model(..model, cells: cells, deps: deps)
+  recalculate(cells, ref)
+}
 
-  // Find and recalculate all dependents
-  case has_circ {
-    True -> model
-    False -> recalculate_dependents(model, ref)
+fn lookup(cells: Dict(CellRef, Cell), ref: CellRef) -> Value {
+  case dict.get(cells, ref) {
+    Ok(cell) -> cell.value
+    Error(_) -> VEmpty
+  }
+}
+
+/// Re-evaluates `changed` and every cell that (transitively) depends on it.
+/// Cells on a reference cycle evaluate to `CircularRef`; cells depending on
+/// them pick that error up through normal evaluation.
+fn recalculate(cells: Dict(CellRef, Cell), changed: CellRef) {
+  let deps = dependencies(cells)
+  let affected =
+    collect_dependents(changed, invert(deps), set.from_list([changed]))
+  let circular =
+    set.filter(affected, fn(ref) { has_cycle(ref, deps_of(deps, ref), deps) })
+
+  let cells =
+    set.fold(circular, cells, fn(cells, ref) {
+      set_value(cells, ref, fn(_) { VError(CircularRef) })
+    })
+
+  set.difference(affected, circular)
+  |> topological_order(deps)
+  |> list.fold(cells, fn(cells, ref) {
+    set_value(cells, ref, fn(content) { evaluate(content, cells) })
+  })
+}
+
+fn set_value(
+  cells: Dict(CellRef, Cell),
+  ref: CellRef,
+  value: fn(Content) -> Value,
+) -> Dict(CellRef, Cell) {
+  case dict.get(cells, ref) {
+    Ok(cell) ->
+      dict.insert(cells, ref, Cell(..cell, value: value(cell.content)))
+    Error(_) -> cells
   }
 }
 
 // --- Dependency Graph ---
 
-fn formula_refs(formula: Formula) -> Set(CellRef) {
-  case formula {
-    FEmpty | FNumber(_) | FText(_) -> set.new()
-    FRef(ref) -> set.from_list([ref])
-    FRange(from, to) -> expand_range(from, to) |> set.from_list
-    FCall(_, args) ->
+/// For every cell, the cells it references.
+fn dependencies(cells: Dict(CellRef, Cell)) -> Dict(CellRef, Set(CellRef)) {
+  dict.map_values(cells, fn(_, cell) { content_refs(cell.content) })
+}
+
+fn deps_of(deps: Dict(CellRef, Set(CellRef)), ref: CellRef) -> Set(CellRef) {
+  dict.get(deps, ref) |> result.unwrap(set.new())
+}
+
+fn content_refs(content: Content) -> Set(CellRef) {
+  case content {
+    Formula(expr) -> expr_refs(expr)
+    Blank | Number(_) | Text(_) | Malformed -> set.new()
+  }
+}
+
+fn expr_refs(expr: Expr) -> Set(CellRef) {
+  case expr {
+    Literal(_) -> set.new()
+    Ref(ref) -> set.from_list([ref])
+    Call(_, args) ->
       list.fold(args, set.new(), fn(acc, arg) {
-        set.union(acc, formula_refs(arg))
+        case arg {
+          Single(expr) -> set.union(acc, expr_refs(expr))
+          Range(from, to) ->
+            set.union(acc, set.from_list(expand_range(from, to)))
+        }
       })
   }
 }
@@ -234,70 +289,13 @@ fn expand_range(from: CellRef, to: CellRef) -> List(CellRef) {
   })
 }
 
-fn has_cycle(
-  target: CellRef,
-  refs: Set(CellRef),
-  deps: Dict(CellRef, Set(CellRef)),
-  visited: Set(CellRef),
-) -> Bool {
-  set.fold(refs, False, fn(found, ref) {
-    case found {
-      True -> True
-      False ->
-        case ref == target {
-          True -> True
-          False ->
-            case set.contains(visited, ref) {
-              True -> False
-              False -> {
-                let visited = set.insert(visited, ref)
-                let ref_deps = dict.get(deps, ref) |> result.unwrap(set.new())
-                has_cycle(target, ref_deps, deps, visited)
-              }
-            }
-        }
-    }
-  })
-}
-
-/// Get all cells that depend on `changed` (reverse deps), then topo-sort and
-/// re-evaluate them.
-fn recalculate_dependents(model: Model, changed: CellRef) -> Model {
-  let reverse = build_reverse_deps(model.deps)
-  let affected = collect_dependents(changed, reverse, set.new())
-  let order = topological_sort(affected, model.deps)
-
-  list.fold(order, model, fn(model, ref) {
-    let cell = case dict.get(model.cells, ref) {
-      Ok(c) -> c
-      Error(_) -> Cell(raw: "", formula: Ok(FEmpty), value: VEmpty)
-    }
-
-    // Re-check for cycles for each dependent
-    let refs = dict.get(model.deps, ref) |> result.unwrap(set.new())
-    let is_circ = has_cycle(ref, refs, model.deps, set.new())
-
-    let value = case is_circ {
-      True -> VError(CircularRef)
-      False ->
-        case cell.formula {
-          Ok(f) -> evaluate(f, model.cells)
-          Error(_) -> cell.value
-        }
-    }
-
-    let updated = Cell(..cell, value: value)
-    Model(..model, cells: dict.insert(model.cells, ref, updated))
-  })
-}
-
-fn build_reverse_deps(
-  deps: Dict(CellRef, Set(CellRef)),
-) -> Dict(CellRef, Set(CellRef)) {
+/// For every cell, the cells referencing it.
+fn invert(deps: Dict(CellRef, Set(CellRef))) -> Dict(CellRef, Set(CellRef)) {
   dict.fold(deps, dict.new(), fn(reverse, cell, cell_deps) {
     set.fold(cell_deps, reverse, fn(reverse, dep) {
-      let existing = dict.get(reverse, dep) |> result.unwrap(set.new())
-      dict.insert(reverse, dep, set.insert(existing, cell))
+      dict.upsert(reverse, dep, fn(existing) {
+        existing |> option.unwrap(set.new()) |> set.insert(cell)
+      })
     })
   })
 }
@@ -307,315 +305,234 @@ fn collect_dependents(
   reverse: Dict(CellRef, Set(CellRef)),
   visited: Set(CellRef),
 ) -> Set(CellRef) {
-  let dependents = dict.get(reverse, ref) |> result.unwrap(set.new())
-
-  set.fold(dependents, visited, fn(visited, dep) {
+  set.fold(deps_of(reverse, ref), visited, fn(visited, dep) {
     case set.contains(visited, dep) {
       True -> visited
-      False -> {
-        let visited = set.insert(visited, dep)
-        collect_dependents(dep, reverse, visited)
-      }
+      False -> collect_dependents(dep, reverse, set.insert(visited, dep))
     }
   })
 }
 
-/// Kahn's algorithm for topological sort on the subgraph of affected cells.
-fn topological_sort(
-  affected: Set(CellRef),
+/// Whether `target` is reachable from `refs`, i.e. lies on a cycle.
+fn has_cycle(
+  target: CellRef,
+  refs: Set(CellRef),
   deps: Dict(CellRef, Set(CellRef)),
-) -> List(CellRef) {
-  // Build in-degree counts for affected cells only
-  let in_degrees =
-    set.fold(affected, dict.new(), fn(degrees, cell) {
-      // Ensure every affected cell has an entry
-      let degrees = case dict.get(degrees, cell) {
-        Ok(_) -> degrees
-        Error(_) -> dict.insert(degrees, cell, 0)
-      }
-
-      let cell_deps = dict.get(deps, cell) |> result.unwrap(set.new())
-      set.fold(cell_deps, degrees, fn(degrees, dep) {
-        case set.contains(affected, dep) {
-          True -> {
-            let current = dict.get(degrees, cell) |> result.unwrap(0)
-            dict.insert(degrees, cell, current + 1)
-          }
-          False -> degrees
-        }
-      })
-    })
-
-  // Find initial nodes with in-degree 0
-  let queue =
-    dict.fold(in_degrees, [], fn(queue, cell, degree) {
-      case degree {
-        0 -> [cell, ..queue]
-        _ -> queue
-      }
-    })
-
-  topo_sort_loop(queue, in_degrees, affected, deps, [])
+) -> Bool {
+  has_cycle_loop(target, set.to_list(refs), deps, set.new())
 }
 
-fn topo_sort_loop(
-  queue: List(CellRef),
-  in_degrees: Dict(CellRef, Int),
-  affected: Set(CellRef),
+fn has_cycle_loop(
+  target: CellRef,
+  stack: List(CellRef),
   deps: Dict(CellRef, Set(CellRef)),
-  result: List(CellRef),
-) -> List(CellRef) {
-  case queue {
-    [] -> list.reverse(result)
-    [node, ..rest] -> {
-      let result = [node, ..result]
-
-      // Find cells in `affected` that depend on `node`
-      let #(new_queue, new_degrees) =
-        set.fold(affected, #(rest, in_degrees), fn(acc, cell) {
-          let #(q, degrees) = acc
-          let cell_deps = dict.get(deps, cell) |> result.unwrap(set.new())
-          case set.contains(cell_deps, node) {
-            True -> {
-              let degree = { dict.get(degrees, cell) |> result.unwrap(0) } - 1
-              let degrees = dict.insert(degrees, cell, degree)
-              case degree {
-                0 -> #([cell, ..q], degrees)
-                _ -> #(q, degrees)
-              }
-            }
-            False -> acc
-          }
-        })
-
-      topo_sort_loop(new_queue, new_degrees, affected, deps, result)
-    }
-  }
-}
-
-// --- Formula Parser ---
-
-type Parser {
-  Parser(input: String, pos: Int)
-}
-
-fn parse_formula(raw: String) -> Result(Formula, Nil) {
-  let trimmed = string.trim(raw)
-  case trimmed {
-    "" -> Ok(FEmpty)
-    "=" <> rest -> {
-      let parser = Parser(input: rest, pos: 0)
-      case parse_expr(parser) {
-        Ok(#(formula, _)) -> Ok(formula)
-        Error(_) -> Error(Nil)
-      }
-    }
-    _ ->
-      case float.parse(trimmed) {
-        Ok(n) -> Ok(FNumber(n))
-        Error(_) ->
-          case int.parse(trimmed) {
-            Ok(n) -> Ok(FNumber(int.to_float(n)))
-            Error(_) -> Ok(FText(trimmed))
-          }
-      }
-  }
-}
-
-fn parse_expr(parser: Parser) -> Result(#(Formula, Parser), Nil) {
-  let parser = skip_whitespace(parser)
-  case peek(parser) {
-    Error(_) -> Error(Nil)
-    Ok(ch) ->
-      case is_digit(ch) || ch == "-" || ch == "." {
-        True -> parse_number_expr(parser)
+  visited: Set(CellRef),
+) -> Bool {
+  case stack {
+    [] -> False
+    [ref, ..] if ref == target -> True
+    [ref, ..rest] ->
+      case set.contains(visited, ref) {
+        True -> has_cycle_loop(target, rest, deps, visited)
         False ->
-          case is_upper(ch) {
-            True -> parse_cell_ref_expr(parser)
-            False ->
-              case is_lower(ch) {
-                True -> parse_call_expr(parser)
-                False -> Error(Nil)
-              }
-          }
+          has_cycle_loop(
+            target,
+            list.append(set.to_list(deps_of(deps, ref)), rest),
+            deps,
+            set.insert(visited, ref),
+          )
       }
   }
 }
 
-fn parse_number_expr(parser: Parser) -> Result(#(Formula, Parser), Nil) {
-  let #(num_str, parser) = consume_number(parser)
-  case float.parse(num_str) {
-    Ok(n) -> Ok(#(FNumber(n), parser))
-    Error(_) ->
-      case int.parse(num_str) {
-        Ok(n) -> Ok(#(FNumber(int.to_float(n)), parser))
-        Error(_) -> Error(Nil)
-      }
-  }
+/// Orders `cells` so that each cell comes after the cells it depends on.
+/// Dependencies outside `cells` are ignored; `cells` must be acyclic.
+fn topological_order(
+  cells: Set(CellRef),
+  deps: Dict(CellRef, Set(CellRef)),
+) -> List(CellRef) {
+  let #(order, _) =
+    set.fold(cells, #([], set.new()), fn(acc, ref) {
+      visit(ref, cells, deps, acc)
+    })
+
+  list.reverse(order)
 }
 
-fn consume_number(parser: Parser) -> #(String, Parser) {
-  consume_number_loop(parser, "")
-}
-
-fn consume_number_loop(parser: Parser, acc: String) -> #(String, Parser) {
-  case peek(parser) {
-    Ok(ch) ->
-      case is_digit(ch) || ch == "." || ch == "-" {
-        True -> consume_number_loop(advance(parser), acc <> ch)
-        False -> #(acc, parser)
-      }
-    Error(_) -> #(acc, parser)
-  }
-}
-
-fn parse_cell_ref_expr(parser: Parser) -> Result(#(Formula, Parser), Nil) {
-  case parse_cell_ref(parser) {
-    Ok(#(ref, parser)) -> {
-      let parser = skip_whitespace(parser)
-      case peek(parser) {
-        Ok(":") -> {
-          let parser = advance(parser)
-          let parser = skip_whitespace(parser)
-          case parse_cell_ref(parser) {
-            Ok(#(ref2, parser)) -> Ok(#(FRange(ref, ref2), parser))
-            Error(_) -> Error(Nil)
-          }
-        }
-        _ -> Ok(#(FRef(ref), parser))
-      }
+fn visit(
+  ref: CellRef,
+  cells: Set(CellRef),
+  deps: Dict(CellRef, Set(CellRef)),
+  acc: #(List(CellRef), Set(CellRef)),
+) -> #(List(CellRef), Set(CellRef)) {
+  let #(order, seen) = acc
+  case set.contains(seen, ref) || !set.contains(cells, ref) {
+    True -> acc
+    False -> {
+      let #(order, seen) =
+        set.fold(
+          deps_of(deps, ref),
+          #(order, set.insert(seen, ref)),
+          fn(acc, dep) { visit(dep, cells, deps, acc) },
+        )
+      #([ref, ..order], seen)
     }
-    Error(_) -> Error(Nil)
   }
 }
 
-fn parse_cell_ref(parser: Parser) -> Result(#(CellRef, Parser), Nil) {
-  case peek(parser) {
-    Ok(ch) ->
-      case is_upper(ch) {
-        True -> {
-          let col = char_to_col(ch)
-          let parser = advance(parser)
-          let #(row_str, parser) = consume_digits(parser)
-          case int.parse(row_str) {
-            Ok(row) ->
-              case row >= 0 && row <= num_rows - 1 {
-                True -> Ok(#(CellRef(col, row), parser))
-                False -> Error(Nil)
-              }
-            Error(_) -> Error(Nil)
-          }
-        }
-        False -> Error(Nil)
+// --- Parser ---
+
+fn parse_content(raw: String) -> Content {
+  case string.trim(raw) {
+    "" -> Blank
+    "=" <> formula ->
+      case parse_formula(formula) {
+        Ok(expr) -> Formula(expr)
+        Error(_) -> Malformed
       }
-    Error(_) -> Error(Nil)
-  }
-}
-
-fn parse_call_expr(parser: Parser) -> Result(#(Formula, Parser), Nil) {
-  let #(name, parser) = consume_alpha(parser)
-  let parser = skip_whitespace(parser)
-  case expect_char(parser, "(") {
-    Ok(parser) -> {
-      case parse_args(parser) {
-        Ok(#(args, parser)) -> {
-          let parser = skip_whitespace(parser)
-          case expect_char(parser, ")") {
-            Ok(parser) -> Ok(#(FCall(name, args), parser))
-            Error(_) -> Error(Nil)
-          }
-        }
-        Error(_) -> Error(Nil)
+    text ->
+      case parse_number(text) {
+        Ok(n) -> Number(n)
+        Error(_) -> Text(text)
       }
-    }
-    Error(_) -> Error(Nil)
   }
 }
 
-fn parse_args(parser: Parser) -> Result(#(List(Formula), Parser), Nil) {
-  let parser = skip_whitespace(parser)
-  // Handle empty args
-  case peek(parser) {
-    Ok(")") -> Ok(#([], parser))
-    _ -> parse_args_loop(parser, [])
+fn parse_number(text: String) -> Result(Float, Nil) {
+  float.parse(text)
+  |> result.lazy_or(fn() { int.parse(text) |> result.map(int.to_float) })
+}
+
+/// Parses a whole formula; trailing input is an error.
+fn parse_formula(input: String) -> Result(Expr, Nil) {
+  use #(expr, rest) <- result.try(parse_expr(input))
+  case string.trim(rest) {
+    "" -> Ok(expr)
+    _ -> Error(Nil)
+  }
+}
+
+fn parse_expr(input: String) -> Result(#(Expr, String), Nil) {
+  let input = string.trim_start(input)
+  let first = string.first(input) |> result.unwrap("")
+
+  case
+    is_digit(first) || first == "-" || first == ".",
+    is_upper(first),
+    is_lower(first)
+  {
+    True, _, _ -> parse_literal(input)
+    _, True, _ ->
+      parse_cell_ref(input) |> result.map(fn(p) { #(Ref(p.0), p.1) })
+    _, _, True -> parse_call(input)
+    _, _, _ -> Error(Nil)
+  }
+}
+
+fn parse_literal(input: String) -> Result(#(Expr, String), Nil) {
+  let #(sign, rest) = case input {
+    "-" <> rest -> #("-", rest)
+    _ -> #("", input)
+  }
+  let #(digits, rest) = take_while(rest, fn(ch) { is_digit(ch) || ch == "." })
+
+  parse_number(sign <> digits) |> result.map(fn(n) { #(Literal(n), rest) })
+}
+
+fn parse_cell_ref(input: String) -> Result(#(CellRef, String), Nil) {
+  use #(letter, rest) <- result.try(string.pop_grapheme(input))
+  use col <- result.try(column_from_letter(letter))
+  let #(digits, rest) = take_while(rest, is_digit)
+  use row <- result.try(int.parse(digits))
+  use ref <- result.try(cell_ref(col, row))
+  Ok(#(ref, rest))
+}
+
+fn parse_call(input: String) -> Result(#(Expr, String), Nil) {
+  let #(name, rest) = take_while(input, fn(ch) { is_lower(ch) || is_upper(ch) })
+  use function <- result.try(function_from_name(name))
+  use rest <- result.try(expect(rest, "("))
+  use #(args, rest) <- result.try(parse_args(rest))
+  use rest <- result.try(expect(rest, ")"))
+  Ok(#(Call(function, args), rest))
+}
+
+fn function_from_name(name: String) -> Result(Function, Nil) {
+  case name {
+    "add" -> Ok(Add)
+    "sub" -> Ok(Sub)
+    "mul" -> Ok(Mul)
+    "div" -> Ok(Div)
+    "mod" -> Ok(Mod)
+    "sum" -> Ok(Sum)
+    "prod" -> Ok(Prod)
+    _ -> Error(Nil)
+  }
+}
+
+fn parse_args(input: String) -> Result(#(List(Arg), String), Nil) {
+  case string.trim_start(input) {
+    ")" <> _ -> Ok(#([], input))
+    _ -> parse_args_loop(input, [])
   }
 }
 
 fn parse_args_loop(
-  parser: Parser,
-  acc: List(Formula),
-) -> Result(#(List(Formula), Parser), Nil) {
-  let parser = skip_whitespace(parser)
-  case parse_expr(parser) {
-    Ok(#(expr, parser)) -> {
-      let acc = list.append(acc, [expr])
-      let parser = skip_whitespace(parser)
-      case peek(parser) {
-        Ok(",") -> {
-          let parser = advance(parser)
-          parse_args_loop(parser, acc)
+  input: String,
+  acc: List(Arg),
+) -> Result(#(List(Arg), String), Nil) {
+  use #(arg, rest) <- result.try(parse_arg(input))
+  let acc = [arg, ..acc]
+  case string.trim_start(rest) {
+    "," <> rest -> parse_args_loop(rest, acc)
+    rest -> Ok(#(list.reverse(acc), rest))
+  }
+}
+
+fn parse_arg(input: String) -> Result(#(Arg, String), Nil) {
+  let input = string.trim_start(input)
+  case parse_cell_ref(input) {
+    Ok(#(from, rest)) ->
+      case string.trim_start(rest) {
+        ":" <> rest -> {
+          use #(to, rest) <- result.try(parse_cell_ref(string.trim_start(rest)))
+          Ok(#(Range(from, to), rest))
         }
-        _ -> Ok(#(acc, parser))
+        _ -> Ok(#(Single(Ref(from)), rest))
       }
-    }
-    Error(_) -> Error(Nil)
+    Error(_) -> parse_expr(input) |> result.map(fn(p) { #(Single(p.0), p.1) })
   }
 }
 
 // --- Parser Helpers ---
 
-fn peek(parser: Parser) -> Result(String, Nil) {
-  case string.pop_grapheme(string.drop_start(parser.input, parser.pos)) {
-    Ok(#(ch, _)) -> Ok(ch)
-    Error(_) -> Error(Nil)
+fn expect(input: String, token: String) -> Result(String, Nil) {
+  let input = string.trim_start(input)
+  case string.starts_with(input, token) {
+    True -> Ok(string.drop_start(input, string.length(token)))
+    False -> Error(Nil)
   }
 }
 
-fn advance(parser: Parser) -> Parser {
-  Parser(..parser, pos: parser.pos + 1)
+fn take_while(
+  input: String,
+  predicate: fn(String) -> Bool,
+) -> #(String, String) {
+  take_while_loop(input, predicate, "")
 }
 
-fn skip_whitespace(parser: Parser) -> Parser {
-  case peek(parser) {
-    Ok(" ") -> skip_whitespace(advance(parser))
-    _ -> parser
-  }
-}
-
-fn consume_digits(parser: Parser) -> #(String, Parser) {
-  consume_digits_loop(parser, "")
-}
-
-fn consume_digits_loop(parser: Parser, acc: String) -> #(String, Parser) {
-  case peek(parser) {
-    Ok(ch) ->
-      case is_digit(ch) {
-        True -> consume_digits_loop(advance(parser), acc <> ch)
-        False -> #(acc, parser)
+fn take_while_loop(
+  input: String,
+  predicate: fn(String) -> Bool,
+  acc: String,
+) -> #(String, String) {
+  case string.pop_grapheme(input) {
+    Ok(#(ch, rest)) ->
+      case predicate(ch) {
+        True -> take_while_loop(rest, predicate, acc <> ch)
+        False -> #(acc, input)
       }
-    Error(_) -> #(acc, parser)
-  }
-}
-
-fn consume_alpha(parser: Parser) -> #(String, Parser) {
-  consume_alpha_loop(parser, "")
-}
-
-fn consume_alpha_loop(parser: Parser, acc: String) -> #(String, Parser) {
-  case peek(parser) {
-    Ok(ch) ->
-      case is_lower(ch) || is_upper(ch) {
-        True -> consume_alpha_loop(advance(parser), acc <> ch)
-        False -> #(acc, parser)
-      }
-    Error(_) -> #(acc, parser)
-  }
-}
-
-fn expect_char(parser: Parser, expected: String) -> Result(Parser, Nil) {
-  case peek(parser) {
-    Ok(ch) if ch == expected -> Ok(advance(parser))
-    _ -> Error(Nil)
+    Error(_) -> #(acc, input)
   }
 }
 
@@ -627,94 +544,83 @@ fn is_digit(ch: String) -> Bool {
 }
 
 fn is_upper(ch: String) -> Bool {
-  ch == string.uppercase(ch) && ch != string.lowercase(ch)
+  case ascii_code(ch) {
+    Ok(code) -> code >= 65 && code <= 90
+    Error(_) -> False
+  }
 }
 
 fn is_lower(ch: String) -> Bool {
-  ch == string.lowercase(ch) && ch != string.uppercase(ch)
+  case ascii_code(ch) {
+    Ok(code) -> code >= 97 && code <= 122
+    Error(_) -> False
+  }
 }
 
-fn char_to_col(ch: String) -> Int {
-  let assert [codepoint] = string.to_utf_codepoints(ch)
-  let assert [base] = string.to_utf_codepoints("A")
-
-  string.utf_codepoint_to_int(codepoint) - string.utf_codepoint_to_int(base)
+fn ascii_code(ch: String) -> Result(Int, Nil) {
+  case string.to_utf_codepoints(ch) {
+    [codepoint] -> Ok(string.utf_codepoint_to_int(codepoint))
+    _ -> Error(Nil)
+  }
 }
 
-fn col_to_char(col: Int) -> String {
-  let assert [base] = string.to_utf_codepoints("A")
-  let assert Ok(codepoint) =
-    string.utf_codepoint(string.utf_codepoint_to_int(base) + col)
+fn column_from_letter(ch: String) -> Result(Int, Nil) {
+  case is_upper(ch), ascii_code(ch) {
+    True, Ok(code) if code - 65 < num_cols -> Ok(code - 65)
+    _, _ -> Error(Nil)
+  }
+}
 
+fn column_to_letter(col: Int) -> String {
+  let assert Ok(codepoint) = string.utf_codepoint(65 + col)
   string.from_utf_codepoints([codepoint])
 }
 
-// --- Evaluation Engine ---
+// --- Evaluation ---
 
-fn evaluate(formula: Formula, cells: Dict(CellRef, Cell)) -> Value {
-  case formula {
-    FEmpty -> VEmpty
-    FNumber(n) -> VNumber(n)
-    FText(s) -> VText(s)
-    FRef(ref) ->
-      case dict.get(cells, ref) {
-        Ok(cell) -> cell.value
-        Error(_) -> VEmpty
-      }
-    FRange(_, _) -> VError(TypeError)
-    FCall(name, args) -> evaluate_call(name, args, cells)
+fn evaluate(content: Content, cells: Dict(CellRef, Cell)) -> Value {
+  case content {
+    Blank -> VEmpty
+    Number(n) -> VNumber(n)
+    Text(s) -> VText(s)
+    Formula(expr) -> evaluate_expr(expr, cells)
+    Malformed -> VError(ParseError)
   }
 }
 
-fn evaluate_call(
-  name: String,
-  args: List(Formula),
-  cells: Dict(CellRef, Cell),
-) -> Value {
-  // Flatten args: expand ranges into individual cell refs
-  let values = flatten_args(args, cells)
-
-  case name {
-    "add" -> binary_op(values, fn(a, b) { Ok(a +. b) })
-    "sub" -> binary_op(values, fn(a, b) { Ok(a -. b) })
-    "mul" -> binary_op(values, fn(a, b) { Ok(a *. b) })
-    "div" ->
-      binary_op(values, fn(a, b) {
-        case b == 0.0 {
-          True -> Error(DivByZero)
-          False -> Ok(a /. b)
+fn evaluate_expr(expr: Expr, cells: Dict(CellRef, Cell)) -> Value {
+  case expr {
+    Literal(n) -> VNumber(n)
+    Ref(ref) -> lookup(cells, ref)
+    Call(function, args) ->
+      args
+      |> list.flat_map(fn(arg) {
+        case arg {
+          Single(expr) -> [evaluate_expr(expr, cells)]
+          Range(from, to) ->
+            expand_range(from, to) |> list.map(lookup(cells, _))
         }
       })
-    "mod" ->
-      binary_op(values, fn(a, b) {
-        case b == 0.0 {
-          True -> Error(DivByZero)
-          False -> {
-            let assert Ok(result) = float.modulo(a, b)
-            Ok(result)
-          }
-        }
-      })
-    "sum" -> aggregate_op(values, float.sum)
-    "prod" -> aggregate_op(values, float.product)
-    _ -> VError(ParseError)
+      |> apply(function, _)
   }
 }
 
-fn flatten_args(args: List(Formula), cells: Dict(CellRef, Cell)) -> List(Value) {
-  list.flat_map(args, fn(arg) {
-    case arg {
-      FRange(from, to) ->
-        expand_range(from, to)
-        |> list.map(fn(ref) {
-          case dict.get(cells, ref) {
-            Ok(cell) -> cell.value
-            Error(_) -> VEmpty
-          }
-        })
-      _ -> [evaluate(arg, cells)]
-    }
-  })
+fn apply(function: Function, values: List(Value)) -> Value {
+  case function {
+    Add -> binary_op(values, fn(a, b) { Ok(a +. b) })
+    Sub -> binary_op(values, fn(a, b) { Ok(a -. b) })
+    Mul -> binary_op(values, fn(a, b) { Ok(a *. b) })
+    Div ->
+      binary_op(values, fn(a, b) {
+        float.divide(a, b) |> result.replace_error(DivByZero)
+      })
+    Mod ->
+      binary_op(values, fn(a, b) {
+        float.modulo(a, b) |> result.replace_error(DivByZero)
+      })
+    Sum -> aggregate_op(values, float.sum)
+    Prod -> aggregate_op(values, float.product)
+  }
 }
 
 fn coerce_number(value: Value) -> Result(Float, CellError) {
@@ -731,24 +637,23 @@ fn binary_op(
   op: fn(Float, Float) -> Result(Float, CellError),
 ) -> Value {
   case values {
-    [a, b] ->
-      case coerce_number(a), coerce_number(b) {
-        Ok(a), Ok(b) ->
-          case op(a, b) {
-            Ok(result) -> VNumber(result)
-            Error(e) -> VError(e)
-          }
-        Error(e), _ -> VError(e)
-        _, Error(e) -> VError(e)
+    [a, b] -> {
+      let result = {
+        use a <- result.try(coerce_number(a))
+        use b <- result.try(coerce_number(b))
+        op(a, b)
       }
+      case result {
+        Ok(n) -> VNumber(n)
+        Error(e) -> VError(e)
+      }
+    }
     _ -> VError(TypeError)
   }
 }
 
 fn aggregate_op(values: List(Value), op: fn(List(Float)) -> Float) -> Value {
-  let numbers = list.try_map(values, fn(v) { coerce_number(v) })
-
-  case numbers {
+  case list.try_map(values, coerce_number) {
     Ok(nums) -> VNumber(op(nums))
     Error(e) -> VError(e)
   }
@@ -798,7 +703,7 @@ fn view_header() -> Element(Msg) {
             #("z-index", "2"),
           ]),
         ],
-        [html.text(col_to_char(col))],
+        [html.text(column_to_letter(col))],
       )
     })
 
@@ -858,15 +763,14 @@ fn view_row(model: Model, row: Int) -> Element(Msg) {
 }
 
 fn view_cell(model: Model, ref: CellRef) -> Element(Msg) {
-  let is_editing = model.editing == Some(ref)
-
-  case is_editing {
-    True -> view_cell_editing(model)
-    False -> view_cell_display(model, ref)
+  case model.editor {
+    Some(Editor(ref: editing, text:)) if editing == ref ->
+      view_cell_editing(text)
+    _ -> view_cell_display(lookup(model.cells, ref), ref)
   }
 }
 
-fn view_cell_editing(model: Model) -> Element(Msg) {
+fn view_cell_editing(text: String) -> Element(Msg) {
   html.td(
     [
       attribute.styles([
@@ -877,7 +781,7 @@ fn view_cell_editing(model: Model) -> Element(Msg) {
     [
       html.input([
         attribute.id("cell-editor"),
-        attribute.value(model.edit_text),
+        attribute.value(text),
         attribute.styles([
           #("width", "100%"),
           #("height", "100%"),
@@ -896,11 +800,8 @@ fn view_cell_editing(model: Model) -> Element(Msg) {
   )
 }
 
-fn view_cell_display(model: Model, ref: CellRef) -> Element(Msg) {
-  let #(display, styles) = case dict.get(model.cells, ref) {
-    Ok(cell) -> format_value(cell.value)
-    Error(_) -> #("", [])
-  }
+fn view_cell_display(value: Value, ref: CellRef) -> Element(Msg) {
+  let #(display, styles) = format_value(value)
 
   html.td(
     [
@@ -915,7 +816,7 @@ fn view_cell_display(model: Model, ref: CellRef) -> Element(Msg) {
         ..styles
       ]),
       event.on("dblclick", decode.success(UserDoubleClickedCell(ref))),
-      event.on("mousedown", decode.success(UserClickedCell(ref))),
+      event.on("mousedown", decode.success(UserClickedCell)),
     ],
     [html.text(display)],
   )
@@ -946,25 +847,19 @@ fn handle_editor_keydown() -> attribute.Attribute(Msg) {
   event.advanced("keydown", {
     use key <- decode.field("key", decode.string)
     use shift <- decode.field("shiftKey", decode.bool)
+    let handle = fn(msg) {
+      decode.success(event.handler(
+        msg,
+        prevent_default: True,
+        stop_propagation: True,
+      ))
+    }
+
     case key {
-      "Enter" ->
-        decode.success(event.handler(
-          UserFinishedEditing,
-          prevent_default: True,
-          stop_propagation: True,
-        ))
-      "Escape" ->
-        decode.success(event.handler(
-          UserCancelledEditing,
-          prevent_default: True,
-          stop_propagation: True,
-        ))
-      "Tab" ->
-        decode.success(event.handler(
-          UserPressedTab(shift),
-          prevent_default: True,
-          stop_propagation: True,
-        ))
+      "Enter" -> handle(UserFinishedEditing)
+      "Escape" -> handle(UserCancelledEditing)
+      "Tab" if shift -> handle(UserPressedTab(Backward))
+      "Tab" -> handle(UserPressedTab(Forward))
       _ ->
         decode.failure(
           event.handler(
