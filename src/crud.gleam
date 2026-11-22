@@ -1,8 +1,8 @@
-import gleam/bool
+import gleam/dict.{type Dict}
+import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/pair
 import gleam/string
 import lustre
 import lustre/attribute
@@ -19,22 +19,32 @@ pub fn main() {
 
 type Model {
   Model(
-    people: List(Person),
-    selected: Option(Int),
-    person: Person,
+    people: Dict(PersonId, Person),
+    next_id: Int,
+    selected: Option(PersonId),
+    draft: Person,
     query: String,
   )
 }
 
-type Person {
-  Person(firstname: String, lastname: String)
+/// Identifies a person independently of its position in the (filtered)
+/// list. Ids increase monotonically, so they also give the insertion order.
+type PersonId {
+  PersonId(Int)
 }
+
+type Person {
+  Person(name: String, surname: String)
+}
+
+const empty_person = Person(name: "", surname: "")
 
 fn init(_: flags) -> Model {
   Model(
-    people: [],
+    people: dict.new(),
+    next_id: 0,
     selected: None,
-    person: Person(firstname: "", lastname: ""),
+    draft: empty_person,
     query: "",
   )
 }
@@ -43,66 +53,86 @@ type Msg {
   UserCreatedPerson
   UserUpdatedPerson
   UserDeletedPerson
-  UserSelectedPerson(Int)
-  UserUpdatedFirstname(String)
-  UserUpdatedLastname(String)
+  UserSelectedPerson(PersonId)
+  UserUpdatedName(String)
+  UserUpdatedSurname(String)
   UserUpdatedQuery(String)
 }
 
 fn update(model: Model, msg: Msg) -> Model {
-  case msg {
-    UserCreatedPerson ->
+  case msg, model.selected {
+    UserCreatedPerson, _ ->
       Model(
         ..model,
-        people: list.append(model.people, [model.person]),
+        people: dict.insert(model.people, PersonId(model.next_id), model.draft),
+        next_id: model.next_id + 1,
         selected: None,
-        person: Person(firstname: "", lastname: ""),
+        draft: empty_person,
       )
 
-    UserUpdatedPerson -> {
-      let assert Some(index) = model.selected
-      let assert #(part1, [_, ..part2]) = list.split(model.people, index)
-
+    UserUpdatedPerson, Some(id) ->
       Model(
         ..model,
-        people: list.flatten([part1, [model.person], part2]),
+        people: dict.insert(model.people, id, model.draft),
         selected: None,
-        person: Person(firstname: "", lastname: ""),
+        draft: empty_person,
       )
-    }
 
-    UserDeletedPerson -> {
-      let assert Some(index) = model.selected
-      let assert #(part1, [_, ..part2]) = list.split(model.people, index)
+    UserDeletedPerson, Some(id) ->
+      Model(..model, people: dict.delete(model.people, id), selected: None)
 
-      Model(..model, people: list.append(part1, part2), selected: None)
-    }
-
-    UserSelectedPerson(index) -> Model(..model, selected: Some(index))
-
-    UserUpdatedFirstname(firstname) ->
-      Model(..model, person: Person(..model.person, firstname:))
-
-    UserUpdatedLastname(lastname) ->
-      Model(..model, person: Person(..model.person, lastname:))
-
-    UserUpdatedQuery(query) -> {
-      let selected = case model.selected {
-        Some(index) ->
-          filter_people(model.people, query)
-          |> list.map(pair.first)
-          |> list.contains(index)
-          |> bool.guard(model.selected, fn() { None })
-        None -> None
+    UserSelectedPerson(id), _ ->
+      case dict.get(model.people, id) {
+        Ok(person) -> Model(..model, selected: Some(id), draft: person)
+        Error(_) -> model
       }
+
+    UserUpdatedName(name), _ ->
+      Model(..model, draft: Person(..model.draft, name:))
+
+    UserUpdatedSurname(surname), _ ->
+      Model(..model, draft: Person(..model.draft, surname:))
+
+    // Deselect a person that is no longer visible with the new filter.
+    UserUpdatedQuery(query), selected -> {
+      let selected =
+        option.then(selected, fn(id) {
+          case dict.get(model.people, id) {
+            Ok(person) ->
+              case matches(person, query) {
+                True -> Some(id)
+                False -> None
+              }
+            Error(_) -> None
+          }
+        })
 
       Model(..model, selected:, query:)
     }
+
+    // Update and delete need a selection; the buttons are disabled otherwise.
+    UserUpdatedPerson, None | UserDeletedPerson, None -> model
   }
 }
 
+fn matches(person: Person, query: String) -> Bool {
+  string.starts_with(string.lowercase(person.surname), string.lowercase(query))
+}
+
+/// The people matching the current filter, in insertion order.
+fn visible_people(model: Model) -> List(#(PersonId, Person)) {
+  model.people
+  |> dict.to_list
+  |> list.filter(fn(entry) { matches(entry.1, model.query) })
+  |> list.sort(fn(a, b) {
+    let PersonId(a) = a.0
+    let PersonId(b) = b.0
+    int.compare(a, b)
+  })
+}
+
 fn view(model: Model) -> Element(Msg) {
-  let selected = option.is_some(model.selected)
+  let no_selection = option.is_none(model.selected)
 
   html.div([attribute.class("column")], [
     view_input(
@@ -110,51 +140,51 @@ fn view(model: Model) -> Element(Msg) {
       label: "Filter prefix:",
       on_input: UserUpdatedQuery,
     ),
-    html.div([attribute.class("row"), attribute.style("align-items", "flex-start")], [
-    html.select(
-      [
-        attribute.style("width", "15em"),
-        attribute.id("person"),
-        attribute.attribute("size", "5"),
-        event.on_input(fn(value) {
-          let assert Ok(index) = int.parse(value)
-          UserSelectedPerson(index)
-        }),
-      ],
-      view_person_options(model),
-    ),
     html.div(
+      [attribute.class("row"), attribute.style("align-items", "flex-start")],
       [
-        attribute.style("display", "grid"),
-        attribute.style("grid-template-columns", "auto 1fr"),
-        attribute.style("gap", "0.5rem"),
-        attribute.style("align-items", "center"),
+        html.select(
+          [
+            attribute.style("width", "15em"),
+            attribute.id("person"),
+            attribute.attribute("size", "5"),
+            event.on("input", person_id_decoder()),
+          ],
+          view_person_options(model),
+        ),
+        html.div(
+          [
+            attribute.style("display", "grid"),
+            attribute.style("grid-template-columns", "auto 1fr"),
+            attribute.style("gap", "0.5rem"),
+            attribute.style("align-items", "center"),
+          ],
+          [
+            view_grid_input(
+              value: model.draft.name,
+              label: "Name:",
+              on_input: UserUpdatedName,
+            ),
+            view_grid_input(
+              value: model.draft.surname,
+              label: "Surname:",
+              on_input: UserUpdatedSurname,
+            ),
+          ],
+        ),
       ],
-      [
-      view_grid_input(
-        value: model.person.firstname,
-        label: "Name:",
-        on_input: UserUpdatedFirstname,
-      ),
-      view_grid_input(
-        value: model.person.lastname,
-        label: "Surname:",
-        on_input: UserUpdatedLastname,
-      ),
-    ],
     ),
-    ]),
     html.div([attribute.class("row")], [
       view_button(label: "Create", on_click: UserCreatedPerson, disabled: False),
       view_button(
         label: "Update",
         on_click: UserUpdatedPerson,
-        disabled: !selected,
+        disabled: no_selection,
       ),
       view_button(
         label: "Delete",
         on_click: UserDeletedPerson,
-        disabled: !selected,
+        disabled: no_selection,
       ),
     ]),
   ])
@@ -193,28 +223,25 @@ fn view_button(
 }
 
 fn view_person_options(model: Model) -> List(Element(Msg)) {
-  filter_people(model.people, model.query)
-  |> list.map(fn(pair) {
-    let #(index, person) = pair
+  visible_people(model)
+  |> list.map(fn(entry) {
+    let #(id, person) = entry
+    let PersonId(value) = id
 
     html.option(
       [
-        attribute.value(int.to_string(index)),
-        attribute.selected(model.selected == Some(index)),
+        attribute.value(int.to_string(value)),
+        attribute.selected(model.selected == Some(id)),
       ],
-      person.lastname <> ", " <> person.firstname,
+      person.surname <> ", " <> person.name,
     )
   })
 }
 
-fn filter_people(people: List(Person), query: String) -> List(#(Int, Person)) {
-  people
-  |> list.index_map(fn(person, index) { #(index, person) })
-  |> list.filter(fn(pair) {
-    let #(_, person) = pair
-    string.starts_with(
-      string.lowercase(person.lastname),
-      string.lowercase(query),
-    )
-  })
+fn person_id_decoder() -> Decoder(Msg) {
+  use value <- decode.subfield(["target", "value"], decode.string)
+  case int.parse(value) {
+    Ok(id) -> decode.success(UserSelectedPerson(PersonId(id)))
+    Error(_) -> decode.failure(UserSelectedPerson(PersonId(0)), "person id")
+  }
 }
