@@ -1,6 +1,6 @@
 import gleam/float
 import gleam/int
-import gleam/result
+import gleam/string
 import lustre
 import lustre/attribute
 import lustre/element.{type Element}
@@ -14,72 +14,104 @@ pub fn main() {
   Nil
 }
 
-type Model =
-  #(Temperature(Celsius), Temperature(Fahrenheit))
+/// The text of both fields, exactly as shown. Numbers are parsed from it on
+/// demand, so the user's input is never reformatted while typing.
+type Model {
+  Model(celsius: String, fahrenheit: String)
+}
 
-type Fahrenheit
+type Celsius {
+  Celsius(Int)
+}
 
-type Celsius
+type Fahrenheit {
+  Fahrenheit(Int)
+}
 
-type Temperature(unit) {
-  Number(Int)
-  Text(String)
+type Input(a) {
+  Empty
+  Valid(a)
+  Invalid
 }
 
 fn init(_: flags) -> Model {
-  #(Text(""), Text(""))
+  Model(celsius: "", fahrenheit: "")
 }
 
 type Msg {
-  UserUpdatedCelsius(Temperature(Celsius))
-  UserUpdatedFahrenheit(Temperature(Fahrenheit))
+  UserUpdatedCelsius(String)
+  UserUpdatedFahrenheit(String)
 }
 
 fn update(model: Model, msg: Msg) -> Model {
-  let #(celsius, fahrenheit) = model
-
+  // The specification requires: When the user enters a non-numerical
+  // string into TC the value in TF is not updated and vice versa.
   case msg {
-    UserUpdatedCelsius(temperature) -> #(temperature, case temperature {
-      Number(value) -> Number(to_fahrenheit(value))
-      // The specification requires: When the user enters a non-numerical
-      // string into TC the value in TF is not updated and vice versa.
-      // Otherwise, Text("") could be returned, in this case.
-      Text(_) -> fahrenheit
-    })
+    UserUpdatedCelsius(text) ->
+      case parse(text, Celsius) {
+        Valid(celsius) ->
+          Model(
+            celsius: text,
+            fahrenheit: fahrenheit_to_string(to_fahrenheit(celsius)),
+          )
+        Empty | Invalid -> Model(..model, celsius: text)
+      }
 
-    UserUpdatedFahrenheit(temperature) -> #(
-      case temperature {
-        Number(value) -> Number(to_celsius(value))
-        // The specification requires: When the user enters a non-numerical
-        // string into TC the value in TF is not updated and vice versa.
-        // Otherwise, Text("") could be returned, in this case.
-        Text(_) -> celsius
-      },
-      temperature,
-    )
+    UserUpdatedFahrenheit(text) ->
+      case parse(text, Fahrenheit) {
+        Valid(fahrenheit) ->
+          Model(
+            celsius: celsius_to_string(to_celsius(fahrenheit)),
+            fahrenheit: text,
+          )
+        Empty | Invalid -> Model(..model, fahrenheit: text)
+      }
   }
 }
 
-fn to_celsius(fahrenheit: Int) -> Int {
-  float.round({ int.to_float(fahrenheit) -. 32.0 } *. { 5.0 /. 9.0 })
+fn parse(text: String, unit: fn(Int) -> a) -> Input(a) {
+  case string.trim(text) {
+    "" -> Empty
+    trimmed ->
+      case int.parse(trimmed) {
+        Ok(value) -> Valid(unit(value))
+        Error(_) -> Invalid
+      }
+  }
 }
 
-fn to_fahrenheit(celsius: Int) -> Int {
-  float.round(int.to_float(celsius) *. { 9.0 /. 5.0 } +. 32.0)
+fn to_celsius(fahrenheit: Fahrenheit) -> Celsius {
+  let Fahrenheit(f) = fahrenheit
+  Celsius(float.round({ int.to_float(f) -. 32.0 } *. { 5.0 /. 9.0 }))
+}
+
+fn to_fahrenheit(celsius: Celsius) -> Fahrenheit {
+  let Celsius(c) = celsius
+  Fahrenheit(float.round(int.to_float(c) *. { 9.0 /. 5.0 } +. 32.0))
+}
+
+fn celsius_to_string(celsius: Celsius) -> String {
+  let Celsius(c) = celsius
+  int.to_string(c)
+}
+
+fn fahrenheit_to_string(fahrenheit: Fahrenheit) -> String {
+  let Fahrenheit(f) = fahrenheit
+  int.to_string(f)
 }
 
 fn view(model: Model) -> Element(Msg) {
-  let #(celsius, fahrenheit) = model
-
   html.div([attribute.class("row")], [
     view_temperature_input(
-      value: celsius,
+      value: model.celsius,
+      invalid: parse(model.celsius, Celsius) == Invalid,
       label: "Celsius",
       on_input: UserUpdatedCelsius,
     ),
     html.text(" = "),
     view_temperature_input(
-      value: fahrenheit,
+      value: model.fahrenheit,
+      invalid: parse(model.fahrenheit, Fahrenheit) == Invalid,
       label: "Fahrenheit",
       on_input: UserUpdatedFahrenheit,
     ),
@@ -87,13 +119,14 @@ fn view(model: Model) -> Element(Msg) {
 }
 
 fn view_temperature_input(
-  value temperature: Temperature(unit),
+  value value: String,
+  invalid invalid: Bool,
   label label: String,
-  on_input handle_input: fn(Temperature(unit)) -> Msg,
+  on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
-  let styles = case temperature {
-    Number(_) | Text("") -> [#("width", "6em")]
-    Text(_) -> [
+  let styles = case invalid {
+    False -> [#("width", "6em")]
+    True -> [
       #("width", "6em"),
       #("outline", "none"),
       #("border", "2px solid red"),
@@ -101,21 +134,11 @@ fn view_temperature_input(
     ]
   }
 
-  let value = case temperature {
-    Number(v) -> int.to_string(v)
-    Text(text) -> text
-  }
-
   element.fragment([
     html.input([
       attribute.styles(styles),
       attribute.value(value),
-      event.on_input(fn(text) {
-        int.parse(text)
-        |> result.map(Number)
-        |> result.unwrap(Text(text))
-        |> handle_input
-      }),
+      event.on_input(handle_input),
     ]),
     html.text(" " <> label),
   ])
