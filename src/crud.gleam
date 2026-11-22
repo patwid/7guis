@@ -79,7 +79,12 @@ fn update(model: Model, msg: Msg) -> Model {
       )
 
     UserDeletedPerson, Some(id) ->
-      Model(..model, people: dict.delete(model.people, id), selected: None)
+      Model(
+        ..model,
+        people: dict.delete(model.people, id),
+        selected: None,
+        draft: empty_person,
+      )
 
     UserSelectedPerson(id), _ ->
       case dict.get(model.people, id) {
