@@ -123,18 +123,26 @@ fn view(model: Model) -> Element(Msg) {
       ],
       view_person_options(model),
     ),
-    html.div([attribute.class("column")], [
-      view_input(
+    html.div(
+      [
+        attribute.style("display", "grid"),
+        attribute.style("grid-template-columns", "auto 1fr"),
+        attribute.style("gap", "0.5rem"),
+        attribute.style("align-items", "center"),
+      ],
+      [
+      view_grid_input(
         value: model.person.firstname,
         label: "Name:",
         on_input: UserUpdatedFirstname,
       ),
-      view_input(
+      view_grid_input(
         value: model.person.lastname,
         label: "Surname:",
         on_input: UserUpdatedLastname,
       ),
-    ]),
+    ],
+    ),
     ]),
     html.div([attribute.class("row")], [
       view_button(label: "Create", on_click: UserCreatedPerson, disabled: False),
@@ -158,6 +166,17 @@ fn view_input(
   on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
   html.label([], [
+    html.text(label),
+    html.input([attribute.value(value), event.on_input(handle_input)]),
+  ])
+}
+
+fn view_grid_input(
+  value value: String,
+  label label: String,
+  on_input handle_input: fn(String) -> Msg,
+) -> Element(Msg) {
+  html.label([attribute.style("display", "contents")], [
     html.text(label),
     html.input([attribute.value(value), event.on_input(handle_input)]),
   ])
