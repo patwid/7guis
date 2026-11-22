@@ -1,82 +1,66 @@
+name: Deploy to GitHub Pages
+
 on:
   push:
-    branches: [ master ]
+    branches: [master]
+  pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
+permissions: {}
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v32
+        with:
+          github_access_token: ${{ github.token }}
+          extra_nix_config: |
+            extra-experimental-features = pipe-operators
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 2G
 
       - name: Build
-        run: |
-          docker run --rm -i \
-            -v ${{ github.workspace }}:/workspace \
-            -w /workspace \
-            -e NIX_CONFIG='experimental-features = nix-command flakes pipe-operators' \
-          nixos/nix:latest sh <<'EOF'
-          set -eu
-
-          git config --global --add safe.directory "$(pwd)"
-
-          nix develop -c sh -eu <<'BUILD'
-          links=""
-          for file in src/*.gleam; do
-            task=$(basename "$file" .gleam)
-            echo "Building task: $task"
-            gleam run -m lustre/dev build --minify --outdir="public/$task" "$task"
-            # lustre emits a root-absolute script path; make it relative so the
-            # page works under any base path (project page, custom domain, ...)
-            sed -i "s|src=\"/$task\.js\"|src=\"$task.js\"|" "public/$task/index.html"
-            title=$(echo "$task" | sed -E 's/_/ /g; s/\b(.)/\u\1/g')
-            links="$links    <li><a href=\"$task\">$title</a></li>
-          "
-          done
-
-          cat > public/index.html <<HTML
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>7GUIs</title>
-            <style>
-              body { font-family: system-ui, sans-serif; margin: 1rem; }
-              li { margin: 0.25rem 0; }
-            </style>
-          </head>
-          <body>
-            <ul>
-          $links  </ul>
-          </body>
-          </html>
-          HTML
-          BUILD
-          EOF
+        run: nix develop -c ./scripts/build.sh
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
         with:
-          path: ./public
+          path: public
 
   deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
