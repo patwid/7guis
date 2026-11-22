@@ -1,44 +1,14 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
+
+    flake-parts = {
+      url = "github:hercules-ci/flake-parts";
+      inputs.nixpkgs-lib.follows = "nixpkgs";
+    };
+
+    import-tree.url = "github:vic/import-tree";
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-    }:
-    let
-      inherit (nixpkgs) lib;
-      eachDefaultSystem =
-        f:
-        lib.systems.flakeExposed
-        |> map (s: lib.mapAttrs (_: v: { ${s} = v; }) (f s))
-        |> lib.foldAttrs lib.mergeAttrs { };
-    in
-    eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-      in
-      {
-        devShells = {
-          default = pkgs.mkShellNoCC {
-            buildInputs = builtins.attrValues {
-              inherit (pkgs)
-                gleam
-                bun
-                nodejs
-                erlang
-                rebar3
-                inotify-tools
-                gnused # CI
-                ;
-            };
-          };
-        };
-
-        formatter = pkgs.nixfmt;
-      }
-    );
+  outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } (inputs.import-tree ./nix);
 }

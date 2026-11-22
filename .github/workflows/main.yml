@@ -27,8 +27,6 @@ jobs:
         uses: cachix/install-nix-action@v32
         with:
           github_access_token: ${{ github.token }}
-          extra_nix_config: |
-            extra-experimental-features = pipe-operators
 
       - name: Cache Nix store
         uses: nix-community/cache-nix-action@v7
