@@ -41,11 +41,12 @@ type Booking {
   ReturnBooking(start: Date, return: Date)
 }
 
-/// The date fields after checking, each with its date or why it has none.
-/// The start date can only be unreadable; only the return date can also be
-/// out of order. `return` is `None` for a one-way flight, which ignores it.
+/// The date fields a flight uses after checking, each with its date or why it
+/// has none. The start date can only be unreadable; only the return date can
+/// also be out of order.
 type Checked {
-  Checked(start: Result(Date, Nil), return: Option(Result(Date, ReturnProblem)))
+  CheckedOneWay(start: Result(Date, Nil))
+  CheckedReturn(start: Result(Date, Nil), return: Result(Date, ReturnProblem))
 }
 
 type ReturnProblem {
@@ -78,12 +79,15 @@ fn update(model: Model, msg: Msg) -> Model {
 /// first.
 fn check(model: Model) -> Checked {
   let start = parse_date(model.start)
-  let return = case model.flight {
-    OneWay -> None
-    Return -> Some(check_return(start, parse_date(model.return)))
-  }
 
-  Checked(start:, return:)
+  case model.flight {
+    OneWay -> CheckedOneWay(start:)
+    Return ->
+      CheckedReturn(
+        start:,
+        return: check_return(start, parse_date(model.return)),
+      )
+  }
 }
 
 /// A return date can only be out of order with a readable start date.
@@ -104,10 +108,11 @@ fn check_return(
 
 /// The booking the checked fields make, if every field used has a date.
 fn booking(checked: Checked) -> Option(Booking) {
-  case checked.start, checked.return {
-    Ok(start), None -> Some(OneWayBooking(start))
-    Ok(start), Some(Ok(return)) -> Some(ReturnBooking(start:, return:))
-    _, _ -> None
+  case checked {
+    CheckedOneWay(start: Ok(start)) -> Some(OneWayBooking(start))
+    CheckedReturn(start: Ok(start), return: Ok(return)) ->
+      Some(ReturnBooking(start:, return:))
+    CheckedOneWay(..) | CheckedReturn(..) -> None
   }
 }
 
@@ -131,10 +136,11 @@ fn view(model: Model) -> Element(Msg) {
     Ok(_) -> None
     Error(_) -> Some(unreadable_message)
   }
-  let return_problem = case checked.return {
-    Some(Error(Unreadable)) -> Some(unreadable_message)
-    Some(Error(BeforeStart)) -> Some("The return date is before the start date")
-    Some(Ok(_)) | None -> None
+  let return_problem = case checked {
+    CheckedReturn(return: Error(Unreadable), ..) -> Some(unreadable_message)
+    CheckedReturn(return: Error(BeforeStart), ..) ->
+      Some("The return date is before the start date")
+    CheckedReturn(return: Ok(_), ..) | CheckedOneWay(..) -> None
   }
 
   html.div([attribute.class("column")], [
