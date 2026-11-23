@@ -9,6 +9,7 @@ import cells/formula.{
 import cells/scan
 import gleam/dict.{type Dict}
 import gleam/float
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -184,23 +185,23 @@ fn remove_neighbour(
 fn recalculate(sheet: Sheet, changed: CellRef) -> Sheet {
   let affected =
     collect_dependents(changed, sheet.dependents, set.from_list([changed]))
-  let circular =
-    set.filter(affected, fn(ref) {
-      has_cycle(ref, dependencies(sheet.cells, ref), sheet.cells)
-    })
 
   let values =
-    set.fold(circular, sheet.values, fn(values, ref) {
-      dict.insert(values, ref, Failed(CircularRef))
-    })
-
-  let values =
-    set.difference(affected, circular)
-    |> topological_order(sheet.cells)
-    |> list.fold(values, fn(values, ref) {
-      case dict.get(sheet.cells, ref) {
-        Ok(cell) -> dict.insert(values, ref, evaluate(cell.content, values))
-        Error(_) -> dict.delete(values, ref)
+    strongly_connected(affected, sheet.cells)
+    |> list.fold(sheet.values, fn(values, component) {
+      case is_cycle(component, sheet.cells) {
+        True ->
+          list.fold(component, values, fn(values, ref) {
+            dict.insert(values, ref, Failed(CircularRef))
+          })
+        False ->
+          list.fold(component, values, fn(values, ref) {
+            case dict.get(sheet.cells, ref) {
+              Ok(cell) ->
+                dict.insert(values, ref, evaluate(cell.content, values))
+              Error(_) -> dict.delete(values, ref)
+            }
+          })
       }
     })
 
@@ -220,70 +221,130 @@ fn collect_dependents(
   })
 }
 
-/// Whether `target` is reachable from `refs`, i.e. lies on a cycle.
-fn has_cycle(
-  target: CellRef,
-  refs: Set(CellRef),
-  cells: Dict(CellRef, Cell),
-) -> Bool {
-  has_cycle_loop(target, set.to_list(refs), cells, set.new())
-}
-
-fn has_cycle_loop(
-  target: CellRef,
-  stack: List(CellRef),
-  cells: Dict(CellRef, Cell),
-  visited: Set(CellRef),
-) -> Bool {
-  case stack {
-    [] -> False
-    [ref, ..] if ref == target -> True
-    [ref, ..rest] ->
-      case set.contains(visited, ref) {
-        True -> has_cycle_loop(target, rest, cells, visited)
-        False ->
-          has_cycle_loop(
-            target,
-            list.append(set.to_list(dependencies(cells, ref)), rest),
-            cells,
-            set.insert(visited, ref),
-          )
-      }
+/// Whether a strongly connected component is a cycle: it has several cells,
+/// or one that reads itself.
+fn is_cycle(component: List(CellRef), cells: Dict(CellRef, Cell)) -> Bool {
+  case component {
+    [ref] -> set.contains(dependencies(cells, ref), ref)
+    _ -> True
   }
 }
 
-/// Orders `refs` so that each cell comes after the cells it depends on.
-/// Dependencies outside `refs` are ignored; `refs` must be acyclic.
-fn topological_order(
+/// The strongly connected components of the cells in `refs`, following the
+/// cells they read and ignoring cells outside `refs`. Each component comes
+/// after the components it reads, so evaluating them in order sees every
+/// dependency up to date.
+///
+/// `affected` can be passed as `refs` without missing a cycle: every cell on a
+/// cycle through an affected cell depends on it, so is affected too.
+///
+/// Tarjan's algorithm, which finds all components in one depth-first search.
+fn strongly_connected(
   refs: Set(CellRef),
   cells: Dict(CellRef, Cell),
-) -> List(CellRef) {
-  let #(order, _) =
-    set.fold(refs, #([], set.new()), fn(acc, ref) {
-      visit(ref, refs, cells, acc)
+) -> List(List(CellRef)) {
+  let search =
+    Search(
+      next_index: 0,
+      index: dict.new(),
+      low_link: dict.new(),
+      stack: [],
+      on_stack: set.new(),
+      components: [],
+    )
+
+  let search =
+    set.fold(refs, search, fn(search, ref) {
+      case dict.has_key(search.index, ref) {
+        True -> search
+        False -> strong_connect(ref, refs, cells, search)
+      }
     })
 
-  list.reverse(order)
+  list.reverse(search.components)
 }
 
-fn visit(
+/// The state of the search in `strongly_connected`. `index` is the order in
+/// which cells were reached, `low_link` the lowest index reachable from a
+/// cell through cells still on the stack.
+type Search {
+  Search(
+    next_index: Int,
+    index: Dict(CellRef, Int),
+    low_link: Dict(CellRef, Int),
+    stack: List(CellRef),
+    on_stack: Set(CellRef),
+    components: List(List(CellRef)),
+  )
+}
+
+fn strong_connect(
   ref: CellRef,
   refs: Set(CellRef),
   cells: Dict(CellRef, Cell),
-  acc: #(List(CellRef), Set(CellRef)),
-) -> #(List(CellRef), Set(CellRef)) {
-  let #(order, seen) = acc
-  case set.contains(seen, ref) || !set.contains(refs, ref) {
-    True -> acc
-    False -> {
-      let #(order, seen) =
-        set.fold(
-          dependencies(cells, ref),
-          #(order, set.insert(seen, ref)),
-          fn(acc, dep) { visit(dep, refs, cells, acc) },
-        )
-      #([ref, ..order], seen)
+  search: Search,
+) -> Search {
+  let index = search.next_index
+  let search =
+    Search(
+      ..search,
+      next_index: index + 1,
+      index: dict.insert(search.index, ref, index),
+      low_link: dict.insert(search.low_link, ref, index),
+      stack: [ref, ..search.stack],
+      on_stack: set.insert(search.on_stack, ref),
+    )
+
+  let search =
+    set.fold(dependencies(cells, ref), search, fn(search, dep) {
+      case set.contains(refs, dep), dict.get(search.index, dep) {
+        False, _ -> search
+        True, Error(_) -> {
+          let search = strong_connect(dep, refs, cells, search)
+          lower_link(search, ref, low_link(search, dep))
+        }
+        True, Ok(dep_index) ->
+          case set.contains(search.on_stack, dep) {
+            True -> lower_link(search, ref, dep_index)
+            False -> search
+          }
+      }
+    })
+
+  case low_link(search, ref) == index {
+    False -> search
+    True -> {
+      let #(component, stack) = pop_component(search.stack, ref, [])
+      Search(
+        ..search,
+        stack:,
+        on_stack: set.drop(search.on_stack, component),
+        components: [component, ..search.components],
+      )
     }
+  }
+}
+
+/// Only called for cells the search has reached, which always have one.
+fn low_link(search: Search, ref: CellRef) -> Int {
+  dict.get(search.low_link, ref) |> result.unwrap(0)
+}
+
+fn lower_link(search: Search, ref: CellRef, candidate: Int) -> Search {
+  let lowered = int.min(low_link(search, ref), candidate)
+  Search(..search, low_link: dict.insert(search.low_link, ref, lowered))
+}
+
+/// Pops the stack down to and including `root`, which closes a component.
+fn pop_component(
+  stack: List(CellRef),
+  root: CellRef,
+  component: List(CellRef),
+) -> #(List(CellRef), List(CellRef)) {
+  case stack {
+    [] -> #(component, [])
+    [ref, ..rest] if ref == root -> #([ref, ..component], rest)
+    [ref, ..rest] -> pop_component(rest, root, [ref, ..component])
   }
 }
 
