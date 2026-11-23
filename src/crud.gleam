@@ -19,6 +19,8 @@ pub fn main() {
 type Model {
   Model(
     people: People,
+    /// Never reused, so an id always denotes the same person.
+    next_id: PersonId,
     selected: Option(PersonId),
     draft: Person,
     query: String,
@@ -26,7 +28,6 @@ type Model {
 }
 
 /// The people in creation order, which is also the order they are listed in.
-/// Ids increase along the list.
 type People =
   List(#(PersonId, Person))
 
@@ -42,7 +43,13 @@ type Person {
 const empty_person = Person(name: "", surname: "")
 
 fn init(_: flags) -> Model {
-  Model(people: [], selected: None, draft: empty_person, query: "")
+  Model(
+    people: [],
+    next_id: PersonId(0),
+    selected: None,
+    draft: empty_person,
+    query: "",
+  )
 }
 
 type Msg {
@@ -57,15 +64,17 @@ type Msg {
 
 fn update(model: Model, msg: Msg) -> Model {
   case msg {
-    UserClickedCreate ->
+    UserClickedCreate -> {
+      let PersonId(id) = model.next_id
+
       Model(
         ..model,
-        people: list.append(model.people, [
-          #(next_id(model.people), model.draft),
-        ]),
+        people: list.append(model.people, [#(model.next_id, model.draft)]),
+        next_id: PersonId(id + 1),
         selected: None,
         draft: empty_person,
       )
+    }
 
     UserClickedUpdate(id) ->
       Model(
@@ -117,14 +126,6 @@ fn update(model: Model, msg: Msg) -> Model {
         False -> Model(..model, query: query)
       }
     }
-  }
-}
-
-/// The id for the next person: one more than the newest.
-fn next_id(people: People) -> PersonId {
-  case list.last(people) {
-    Ok(#(PersonId(last), _)) -> PersonId(last + 1)
-    Error(_) -> PersonId(0)
   }
 }
 
