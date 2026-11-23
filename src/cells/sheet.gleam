@@ -18,8 +18,8 @@ import gleam/string
 
 /// What a cell evaluates to.
 pub type Value {
-  /// A blank cell. A formula never evaluates to it: a blank cell it reads
-  /// counts as `0`, as in other spreadsheets.
+  /// A blank cell. A formula never evaluates to it, as it evaluates to an
+  /// `Operand`, which has no blank.
   Empty
   Number(Float)
   Text(String)
@@ -32,6 +32,15 @@ pub type CellError {
   CircularRef
   TypeError
   DivByZero
+}
+
+/// What a formula, or a part of it, evaluates to. Unlike `Value`, it has no
+/// blank: a blank cell a formula reads counts as `0`, as in other
+/// spreadsheets.
+type Operand {
+  Num(Float)
+  Str(String)
+  Err(CellError)
 }
 
 /// What the user entered into a non-blank cell, after parsing.
@@ -356,17 +365,18 @@ fn evaluate(content: Content, values: Dict(CellRef, Value)) -> Value {
     Label(s) -> Text(s)
     Formula(expr) ->
       case evaluate_expr(expr, values) {
-        Empty -> Number(0.0)
-        value -> value
+        Num(n) -> Number(n)
+        Str(s) -> Text(s)
+        Err(e) -> Failed(e)
       }
     Malformed -> Failed(ParseError)
   }
 }
 
-fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Value {
+fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Operand {
   case expr {
-    Literal(n) -> Number(n)
-    Ref(ref) -> lookup(values, ref)
+    Literal(n) -> Num(n)
+    Ref(ref) -> read(values, ref)
     Binary(op, left, right) ->
       apply_binary(
         op,
@@ -379,14 +389,24 @@ fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Value {
         case arg {
           Single(expr) -> [evaluate_expr(expr, values)]
           Range(from, to) ->
-            cell_ref.range(from, to) |> list.map(lookup(values, _))
+            cell_ref.range(from, to) |> list.map(read(values, _))
         }
       })
       |> apply_aggregate(op, _)
   }
 }
 
-fn apply_binary(op: BinOp, left: Value, right: Value) -> Value {
+/// The value of a cell as a formula reads it.
+fn read(values: Dict(CellRef, Value), ref: CellRef) -> Operand {
+  case lookup(values, ref) {
+    Empty -> Num(0.0)
+    Number(n) -> Num(n)
+    Text(s) -> Str(s)
+    Failed(e) -> Err(e)
+  }
+}
+
+fn apply_binary(op: BinOp, left: Operand, right: Operand) -> Operand {
   let result = {
     use a <- result.try(coerce_number(left))
     use b <- result.try(coerce_number(right))
@@ -399,32 +419,31 @@ fn apply_binary(op: BinOp, left: Value, right: Value) -> Value {
     }
   }
 
-  to_value(result)
+  from_result(result)
 }
 
-fn apply_aggregate(op: AggOp, values: List(Value)) -> Value {
-  list.try_map(values, coerce_number)
+fn apply_aggregate(op: AggOp, operands: List(Operand)) -> Operand {
+  list.try_map(operands, coerce_number)
   |> result.map(fn(numbers) {
     case op {
       Sum -> float.sum(numbers)
       Prod -> float.product(numbers)
     }
   })
-  |> to_value
+  |> from_result
 }
 
-fn coerce_number(value: Value) -> Result(Float, CellError) {
-  case value {
-    Empty -> Ok(0.0)
-    Number(n) -> Ok(n)
-    Text(_) -> Error(TypeError)
-    Failed(e) -> Error(e)
+fn coerce_number(operand: Operand) -> Result(Float, CellError) {
+  case operand {
+    Num(n) -> Ok(n)
+    Str(_) -> Error(TypeError)
+    Err(e) -> Error(e)
   }
 }
 
-fn to_value(result: Result(Float, CellError)) -> Value {
+fn from_result(result: Result(Float, CellError)) -> Operand {
   case result {
-    Ok(n) -> Number(n)
-    Error(e) -> Failed(e)
+    Ok(n) -> Num(n)
+    Error(e) -> Err(e)
   }
 }
