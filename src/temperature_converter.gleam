@@ -21,21 +21,10 @@ type Model {
   Model(celsius: String, fahrenheit: String)
 }
 
-/// A temperature tagged with its unit, so temperatures of different units
-/// cannot be mixed up. By convention, a plain number becomes one only through
-/// `celsius` or `fahrenheit`, which name its unit. This is not enforced: the
-/// constructor is visible throughout this module and would infer any unit.
-type Temperature(unit) {
-  Temperature(Float)
-}
-
-type Celsius
-
-type Fahrenheit
-
-type Input(a) {
+/// The text of a field, parsed into a number of degrees.
+type Input {
   Empty
-  Valid(a)
+  Valid(Float)
   Invalid
 }
 
@@ -54,19 +43,19 @@ fn update(model: Model, msg: Msg) -> Model {
   case msg {
     UserUpdatedCelsius(text) ->
       case parse(text) {
-        Valid(degrees) ->
+        Valid(celsius) ->
           Model(
             celsius: text,
-            fahrenheit: to_string(to_fahrenheit(celsius(degrees))),
+            fahrenheit: format_number(to_fahrenheit(celsius)),
           )
         Empty | Invalid -> Model(..model, celsius: text)
       }
 
     UserUpdatedFahrenheit(text) ->
       case parse(text) {
-        Valid(degrees) ->
+        Valid(fahrenheit) ->
           Model(
-            celsius: to_string(to_celsius(fahrenheit(degrees))),
+            celsius: format_number(to_celsius(fahrenheit)),
             fahrenheit: text,
           )
         Empty | Invalid -> Model(..model, fahrenheit: text)
@@ -74,9 +63,7 @@ fn update(model: Model, msg: Msg) -> Model {
   }
 }
 
-/// Parses the text of a field into a number of degrees. It yields no
-/// `Temperature`: the caller has to name the unit.
-fn parse(text: String) -> Input(Float) {
+fn parse(text: String) -> Input {
   case string.trim(text) {
     "" -> Empty
     trimmed ->
@@ -93,27 +80,12 @@ fn parse_number(text: String) -> Result(Float, Nil) {
   |> result.lazy_or(fn() { int.parse(text) |> result.map(int.to_float) })
 }
 
-fn celsius(degrees: Float) -> Temperature(Celsius) {
-  Temperature(degrees)
+fn to_celsius(fahrenheit: Float) -> Float {
+  { fahrenheit -. 32.0 } *. { 5.0 /. 9.0 }
 }
 
-fn fahrenheit(degrees: Float) -> Temperature(Fahrenheit) {
-  Temperature(degrees)
-}
-
-fn to_celsius(fahrenheit: Temperature(Fahrenheit)) -> Temperature(Celsius) {
-  let Temperature(f) = fahrenheit
-  Temperature({ f -. 32.0 } *. { 5.0 /. 9.0 })
-}
-
-fn to_fahrenheit(celsius: Temperature(Celsius)) -> Temperature(Fahrenheit) {
-  let Temperature(c) = celsius
-  Temperature(c *. { 9.0 /. 5.0 } +. 32.0)
-}
-
-fn to_string(temperature: Temperature(unit)) -> String {
-  let Temperature(degrees) = temperature
-  format_number(degrees)
+fn to_fahrenheit(celsius: Float) -> Float {
+  celsius *. { 9.0 /. 5.0 } +. 32.0
 }
 
 /// Rounds to two decimals and drops a zero fraction, so conversions read
