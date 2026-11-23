@@ -15,8 +15,11 @@ import lustre/element/html
 import lustre/event
 
 pub fn main() {
+  let #(today, _) =
+    timestamp.system_time() |> timestamp.to_calendar(calendar.local_offset())
+
   let app = lustre.simple(init, update, view)
-  let assert Ok(_) = lustre.start(app, "#app", Nil)
+  let assert Ok(_) = lustre.start(app, "#app", today)
 
   Nil
 }
@@ -49,9 +52,8 @@ type Problems {
   Problems(start: Option(Problem), return: Option(Problem))
 }
 
-fn init(_: flags) -> Model {
-  let #(today, _) =
-    timestamp.system_time() |> timestamp.to_calendar(calendar.utc_offset)
+/// Starts with both dates set to `today`, the user's local date.
+fn init(today: Date) -> Model {
   let today = format_date(today)
 
   Model(flight: OneWay, start: today, return: today)
