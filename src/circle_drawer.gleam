@@ -103,11 +103,21 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   #(update_model(model, msg), effect.none())
 }
 
+/// Dispatches on the interaction first, so each state lists every message it
+/// ignores: a new message has to be handled or explicitly ignored in each.
 fn update_model(model: Model, msg: Msg) -> Model {
+  case model.interaction {
+    Idle(_) -> update_idle(model, msg)
+    MenuOpen(id) -> update_menu_open(model, id, msg)
+    Adjusting(id, diameter) -> update_adjusting(model, id, diameter, msg)
+  }
+}
+
+fn update_idle(model: Model, msg: Msg) -> Model {
   let circles = model.history.present
 
-  case msg, model.interaction {
-    UserClickedCanvas(position), Idle(_) ->
+  case msg {
+    UserClickedCanvas(position) ->
       case circle_at(circles, position) {
         None -> {
           let circle = Circle(center: position, diameter: default_diameter)
@@ -123,19 +133,34 @@ fn update_model(model: Model, msg: Msg) -> Model {
         Some(_) -> model
       }
 
-    UserRightClickedCanvas(position), Idle(_) ->
+    UserRightClickedCanvas(position) ->
       case circle_at(circles, position) {
         Some(id) -> Model(..model, interaction: MenuOpen(id))
         None -> model
       }
 
-    UserMovedMouse(position), Idle(_) ->
+    UserMovedMouse(position) ->
       Model(..model, interaction: Idle(pointer: Some(position)))
 
-    UserLeftCanvas, Idle(_) -> Model(..model, interaction: Idle(pointer: None))
+    UserLeftCanvas -> Model(..model, interaction: Idle(pointer: None))
 
-    UserClickedAdjustDiameter, MenuOpen(id) ->
-      case find_circle(circles, id) {
+    UserClickedUndo -> Model(..model, history: history_undo(model.history))
+
+    UserClickedRedo -> Model(..model, history: history_redo(model.history))
+
+    // The menu and the dialog fire their close events after the model has
+    // already closed them; see `on_close`.
+    UserClosedMenu | UserClosedDialog -> model
+
+    // Only the menu and the dialog offer these.
+    UserClickedAdjustDiameter | UserAdjustedDiameter(_) -> model
+  }
+}
+
+fn update_menu_open(model: Model, id: CircleId, msg: Msg) -> Model {
+  case msg {
+    UserClickedAdjustDiameter ->
+      case find_circle(model.history.present, id) {
         Ok(circle) ->
           Model(..model, interaction: Adjusting(id, circle.diameter))
         // The menu only opens for an existing circle and the history cannot
@@ -143,12 +168,30 @@ fn update_model(model: Model, msg: Msg) -> Model {
         Error(_) -> model
       }
 
-    UserClosedMenu, MenuOpen(_) ->
-      Model(..model, interaction: Idle(pointer: None))
+    UserClosedMenu -> Model(..model, interaction: Idle(pointer: None))
 
+    // The menu is modal: the canvas and the undo/redo buttons are inert.
+    UserClickedCanvas(_)
+    | UserRightClickedCanvas(_)
+    | UserMovedMouse(_)
+    | UserLeftCanvas
+    | UserClickedUndo
+    | UserClickedRedo
+    | UserAdjustedDiameter(_)
+    | UserClosedDialog -> model
+  }
+}
+
+fn update_adjusting(
+  model: Model,
+  id: CircleId,
+  diameter: Int,
+  msg: Msg,
+) -> Model {
+  case msg {
     // Only the preview changes while dragging the slider; the history is
     // touched once, when the dialog is closed.
-    UserAdjustedDiameter(diameter), Adjusting(id, _) ->
+    UserAdjustedDiameter(diameter) ->
       Model(
         ..model,
         interaction: Adjusting(
@@ -157,7 +200,8 @@ fn update_model(model: Model, msg: Msg) -> Model {
         ),
       )
 
-    UserClosedDialog, Adjusting(id, diameter) -> {
+    UserClosedDialog -> {
+      let circles = model.history.present
       let history = case find_circle(circles, id) {
         Ok(circle) if circle.diameter != diameter ->
           history_push(model.history, set_diameter(circles, id, diameter))
@@ -167,15 +211,18 @@ fn update_model(model: Model, msg: Msg) -> Model {
       Model(history:, interaction: Idle(pointer: None))
     }
 
-    UserClickedUndo, Idle(_) ->
-      Model(..model, history: history_undo(model.history))
+    // The menu fires its close event after the model has already closed it;
+    // see `on_close`.
+    UserClosedMenu -> model
 
-    UserClickedRedo, Idle(_) ->
-      Model(..model, history: history_redo(model.history))
-
-    // Any other combination is not meaningful in the current interaction
-    // state (e.g. hovering while a modal dialog is open) and is ignored.
-    _, _ -> model
+    // The dialog is modal: the canvas and the undo/redo buttons are inert.
+    UserClickedCanvas(_)
+    | UserRightClickedCanvas(_)
+    | UserMovedMouse(_)
+    | UserLeftCanvas
+    | UserClickedUndo
+    | UserClickedRedo
+    | UserClickedAdjustDiameter -> model
   }
 }
 
