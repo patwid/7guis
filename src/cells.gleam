@@ -1,7 +1,7 @@
 import cells/cell_ref.{type CellRef}
 import cells/sheet.{
-  type Sheet, type Value, CircularRef, DivByZero, Empty, Failed, Number,
-  ParseError, Text, TypeError,
+  type Sheet, type Value, CircularRef, DivByZero, Failed, Number, ParseError,
+  Text, TypeError,
 }
 import gleam/dynamic/decode
 import gleam/float
@@ -267,7 +267,7 @@ fn view_cell_editing(ref: CellRef, text: String) -> Element(Msg) {
   )
 }
 
-fn view_cell_display(value: Value, ref: CellRef) -> Element(Msg) {
+fn view_cell_display(value: Option(Value), ref: CellRef) -> Element(Msg) {
   let #(display, styles) = format_value(value)
 
   html.td(
@@ -289,15 +289,15 @@ fn view_cell_display(value: Value, ref: CellRef) -> Element(Msg) {
   )
 }
 
-fn format_value(value: Value) -> #(String, List(#(String, String))) {
+fn format_value(value: Option(Value)) -> #(String, List(#(String, String))) {
   case value {
-    Empty -> #("", [])
-    Number(n) -> #(format_number(n), [#("text-align", "right")])
-    Text(s) -> #(s, [])
-    Failed(CircularRef) -> #("#CIRC", [#("color", "red")])
-    Failed(DivByZero) -> #("#DIV/0", [#("color", "red")])
-    Failed(TypeError) -> #("#TYPE", [#("color", "red")])
-    Failed(ParseError) -> #("#ERR", [#("color", "red")])
+    None -> #("", [])
+    Some(Number(n)) -> #(format_number(n), [#("text-align", "right")])
+    Some(Text(s)) -> #(s, [])
+    Some(Failed(CircularRef)) -> #("#CIRC", [#("color", "red")])
+    Some(Failed(DivByZero)) -> #("#DIV/0", [#("color", "red")])
+    Some(Failed(TypeError)) -> #("#TYPE", [#("color", "red")])
+    Some(Failed(ParseError)) -> #("#ERR", [#("color", "red")])
   }
 }
 

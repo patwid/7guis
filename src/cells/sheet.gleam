@@ -16,11 +16,9 @@ import gleam/result
 import gleam/set.{type Set}
 import gleam/string
 
-/// What a cell evaluates to.
+/// What a non-blank cell, or a formula or a part of it, evaluates to. A blank
+/// cell has no value; a formula reading it sees `0`, as in other spreadsheets.
 pub type Value {
-  /// A blank cell. A formula never evaluates to it, as it evaluates to an
-  /// `Operand`, which has no blank.
-  Empty
   Number(Float)
   Text(String)
   /// The cell could not be evaluated; shown as an error code.
@@ -32,15 +30,6 @@ pub type CellError {
   CircularRef
   TypeError
   DivByZero
-}
-
-/// What a formula, or a part of it, evaluates to. Unlike `Value`, it has no
-/// blank: a blank cell a formula reads counts as `0`, as in other
-/// spreadsheets.
-type Operand {
-  Num(Float)
-  Str(String)
-  Err(CellError)
 }
 
 /// What the user entered into a non-blank cell, after parsing.
@@ -61,7 +50,7 @@ type Cell {
 
 /// Invariants, maintained by `set`:
 /// - `values` has an entry for exactly the cells in `cells`, evaluated from
-///   their current content;
+///   their current content, so a blank cell has none;
 /// - `dependents` is the inverse of the cells' `refs` and holds no empty sets.
 pub opaque type Sheet {
   Sheet(
@@ -83,8 +72,9 @@ pub fn raw(sheet: Sheet, ref: CellRef) -> String {
   }
 }
 
-pub fn value(sheet: Sheet, ref: CellRef) -> Value {
-  lookup(sheet.values, ref)
+/// The value of the cell; `None` for a blank cell.
+pub fn value(sheet: Sheet, ref: CellRef) -> Option(Value) {
+  dict.get(sheet.values, ref) |> option.from_result
 }
 
 /// Replaces the content of a cell and re-evaluates everything affected. A
@@ -121,10 +111,6 @@ fn parse_content(raw: String) -> Option(Content) {
         Error(_) -> Some(Label(text))
       }
   }
-}
-
-fn lookup(values: Dict(CellRef, Value), ref: CellRef) -> Value {
-  dict.get(values, ref) |> result.unwrap(Empty)
 }
 
 fn content_refs(content: Content) -> Set(CellRef) {
@@ -364,19 +350,14 @@ fn evaluate(content: Content, values: Dict(CellRef, Value)) -> Value {
   case content {
     Constant(n) -> Number(n)
     Label(s) -> Text(s)
-    Formula(expr) ->
-      case evaluate_expr(expr, values) {
-        Num(n) -> Number(n)
-        Str(s) -> Text(s)
-        Err(e) -> Failed(e)
-      }
+    Formula(expr) -> evaluate_expr(expr, values)
     Malformed -> Failed(ParseError)
   }
 }
 
-fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Operand {
+fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Value {
   case expr {
-    Literal(n) -> Num(n)
+    Literal(n) -> Number(n)
     Ref(ref) -> read(values, ref)
     Binary(op, left, right) ->
       apply_binary(
@@ -397,17 +378,12 @@ fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Operand {
   }
 }
 
-/// The value of a cell as a formula reads it.
-fn read(values: Dict(CellRef, Value), ref: CellRef) -> Operand {
-  case lookup(values, ref) {
-    Empty -> Num(0.0)
-    Number(n) -> Num(n)
-    Text(s) -> Str(s)
-    Failed(e) -> Err(e)
-  }
+/// The value of a cell as a formula reads it: a blank cell counts as `0`.
+fn read(values: Dict(CellRef, Value), ref: CellRef) -> Value {
+  dict.get(values, ref) |> result.unwrap(Number(0.0))
 }
 
-fn apply_binary(op: BinOp, left: Operand, right: Operand) -> Operand {
+fn apply_binary(op: BinOp, left: Value, right: Value) -> Value {
   let result = {
     use a <- result.try(coerce_number(left))
     use b <- result.try(coerce_number(right))
@@ -423,7 +399,7 @@ fn apply_binary(op: BinOp, left: Operand, right: Operand) -> Operand {
   from_result(result)
 }
 
-fn apply_aggregate(op: AggOp, operands: List(Operand)) -> Operand {
+fn apply_aggregate(op: AggOp, operands: List(Value)) -> Value {
   list.try_map(operands, coerce_number)
   |> result.map(fn(numbers) {
     case op {
@@ -434,17 +410,17 @@ fn apply_aggregate(op: AggOp, operands: List(Operand)) -> Operand {
   |> from_result
 }
 
-fn coerce_number(operand: Operand) -> Result(Float, CellError) {
+fn coerce_number(operand: Value) -> Result(Float, CellError) {
   case operand {
-    Num(n) -> Ok(n)
-    Str(_) -> Error(TypeError)
-    Err(e) -> Error(e)
+    Number(n) -> Ok(n)
+    Text(_) -> Error(TypeError)
+    Failed(e) -> Error(e)
   }
 }
 
-fn from_result(result: Result(Float, CellError)) -> Operand {
+fn from_result(result: Result(Float, CellError)) -> Value {
   case result {
-    Ok(n) -> Num(n)
-    Error(e) -> Err(e)
+    Ok(n) -> Number(n)
+    Error(e) -> Failed(e)
   }
 }
