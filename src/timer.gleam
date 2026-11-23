@@ -16,16 +16,9 @@ pub fn main() {
   Nil
 }
 
-/// `ticked` is the time counted so far. It only advances while below
-/// `duration`, but stays as it is when the user shortens the duration, so it
-/// may exceed `duration`. What is shown and compared against is `elapsed`.
+/// `elapsed` never exceeds `duration`.
 type Model {
-  Model(ticked: Duration, duration: Duration)
-}
-
-/// The elapsed time: `ticked`, capped at the current duration.
-fn elapsed(model: Model) -> Duration {
-  min(model.ticked, model.duration)
+  Model(elapsed: Duration, duration: Duration)
 }
 
 const tick_ms = 100
@@ -34,7 +27,7 @@ const max_duration_ms = 30_000
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(
-    Model(ticked: duration.milliseconds(0), duration: duration.seconds(15)),
+    Model(elapsed: duration.milliseconds(0), duration: duration.seconds(15)),
     every(tick_ms, TimerTicked),
   )
 }
@@ -55,23 +48,26 @@ type Msg {
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
     TimerTicked ->
-      case duration.compare(elapsed(model), model.duration) {
+      case duration.compare(model.elapsed, model.duration) {
         order.Lt -> {
-          let ticked =
-            duration.add(model.ticked, duration.milliseconds(tick_ms))
+          let elapsed =
+            duration.add(model.elapsed, duration.milliseconds(tick_ms))
             |> min(model.duration)
-          #(Model(..model, ticked:), effect.none())
+          #(Model(..model, elapsed:), effect.none())
         }
         order.Eq | order.Gt -> #(model, effect.none())
       }
 
-    UserUpdatedDuration(duration) -> #(
-      Model(..model, duration: clamp_duration(duration)),
-      effect.none(),
-    )
+    UserUpdatedDuration(duration) -> {
+      let duration = clamp_duration(duration)
+      #(
+        Model(elapsed: min(model.elapsed, duration), duration:),
+        effect.none(),
+      )
+    }
 
     UserResetTimer -> #(
-      Model(..model, ticked: duration.milliseconds(0)),
+      Model(..model, elapsed: duration.milliseconds(0)),
       effect.none(),
     )
   }
@@ -92,8 +88,6 @@ fn min(a: Duration, b: Duration) -> Duration {
 }
 
 fn view(model: Model) -> Element(Msg) {
-  let shown = elapsed(model)
-
   html.div([attribute.class("column")], [
     html.label([], [
       html.text("Elapsed Time:"),
@@ -101,12 +95,12 @@ fn view(model: Model) -> Element(Msg) {
         [
           attribute.styles([#("width", "15em")]),
           attribute.max(to_ms_string(model.duration)),
-          attribute.value(to_ms_string(shown)),
+          attribute.value(to_ms_string(model.elapsed)),
         ],
         [],
       ),
     ]),
-    html.text(format_time(shown)),
+    html.text(format_time(model.elapsed)),
     html.label([], [
       html.text("Duration:"),
       html.input([
