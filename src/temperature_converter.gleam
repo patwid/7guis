@@ -21,8 +21,10 @@ type Model {
   Model(celsius: String, fahrenheit: String)
 }
 
-/// A temperature tagged with its unit. A plain number becomes one only through
-/// `celsius` or `fahrenheit`, so its unit is always named, never inferred.
+/// A temperature tagged with its unit, so temperatures of different units
+/// cannot be mixed up. By convention, a plain number becomes one only through
+/// `celsius` or `fahrenheit`, which name its unit. This is not enforced: the
+/// constructor is visible throughout this module and would infer any unit.
 type Temperature(unit) {
   Temperature(Float)
 }
