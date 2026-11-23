@@ -153,8 +153,8 @@ fn view(model: Model) -> Element(Msg) {
 
 fn view_header() -> Element(Msg) {
   let cols =
-    list.range(0, cell_ref.num_cols - 1)
-    |> list.map(fn(col) {
+    cell_ref.column_names()
+    |> list.map(fn(name) {
       html.th(
         [
           attribute.styles([
@@ -168,7 +168,7 @@ fn view_header() -> Element(Msg) {
             #("z-index", "2"),
           ]),
         ],
-        [html.text(cell_ref.column_letter(col))],
+        [html.text(name)],
       )
     })
 
@@ -196,17 +196,13 @@ fn view_header() -> Element(Msg) {
 }
 
 fn view_body(model: Model) -> Element(Msg) {
-  let rows =
-    list.range(0, cell_ref.num_rows - 1)
-    |> list.map(fn(row) { view_row(model, row) })
+  let rows = cell_ref.rows() |> list.map(view_row(model, _))
 
   html.tbody([], rows)
 }
 
-fn view_row(model: Model, row: Int) -> Element(Msg) {
-  let cells =
-    cell_ref.in_row(row)
-    |> list.map(fn(ref) { view_cell(model, ref) })
+fn view_row(model: Model, row: cell_ref.Row) -> Element(Msg) {
+  let cells = list.map(row.cells, view_cell(model, _))
 
   html.tr([], [
     html.td(
@@ -221,7 +217,7 @@ fn view_row(model: Model, row: Int) -> Element(Msg) {
           #("z-index", "1"),
         ]),
       ],
-      [html.text(int.to_string(row))],
+      [html.text(row.name)],
     ),
     ..cells
   ])

@@ -1,4 +1,5 @@
 import cells/cell_ref
+import gleam/list
 
 fn ref(text: String) -> cell_ref.CellRef {
   let assert Ok(#(ref, "")) = cell_ref.parse(text)
@@ -47,13 +48,22 @@ pub fn range_is_corner_order_independent_test() {
     == cell_ref.range(ref("A0"), ref("B1"))
 }
 
-pub fn in_row_test() {
-  let cells = cell_ref.in_row(3)
-  assert cells != []
-  assert cell_ref.in_row(cell_ref.num_rows) == []
+pub fn rows_test() {
+  let rows = cell_ref.rows()
+  assert list.length(rows) == cell_ref.num_rows
+
+  let assert [first, ..] = rows
+  let assert Ok(last) = list.last(rows)
+  assert first.name == "0"
+  assert list.take(first.cells, 2) == [ref("A0"), ref("B0")]
+  assert list.length(first.cells) == cell_ref.num_cols
+  assert last.name == "99"
+  assert list.last(last.cells) == Ok(ref("Z99"))
 }
 
-pub fn column_letter_test() {
-  assert cell_ref.column_letter(0) == "A"
-  assert cell_ref.column_letter(25) == "Z"
+pub fn column_names_test() {
+  let names = cell_ref.column_names()
+  assert list.length(names) == cell_ref.num_cols
+  assert list.first(names) == Ok("A")
+  assert list.last(names) == Ok("Z")
 }

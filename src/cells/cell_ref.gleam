@@ -23,10 +23,30 @@ pub fn new(col: Int, row: Int) -> Result(CellRef, Nil) {
   }
 }
 
-/// Every cell of a row, left to right. Empty if the row is out of range.
-pub fn in_row(row: Int) -> List(CellRef) {
+/// A row of the sheet: its name, as shown in the row header, and its cells,
+/// left to right.
+pub type Row {
+  Row(name: String, cells: List(CellRef))
+}
+
+/// Every row of the sheet, top to bottom.
+pub fn rows() -> List(Row) {
+  list.range(0, num_rows - 1)
+  |> list.map(fn(row) {
+    Row(
+      name: int.to_string(row),
+      cells: list.map(columns(), fn(col) { CellRef(col:, row:) }),
+    )
+  })
+}
+
+/// The name of every column, left to right, as shown in the column header.
+pub fn column_names() -> List(String) {
+  list.map(columns(), column_letter)
+}
+
+fn columns() -> List(Int) {
   list.range(0, num_cols - 1)
-  |> list.filter_map(new(_, row))
 }
 
 /// The next cell in row-major order, wrapping around at the end.
@@ -59,9 +79,9 @@ pub fn range(from: CellRef, to: CellRef) -> List(CellRef) {
   })
 }
 
-/// The column name, `A` to `Z`. Total because `col` is always in range for a
-/// `CellRef`; for a raw column index outside `0..num_cols` it yields `?`.
-pub fn column_letter(col: Int) -> String {
+/// The column name, `A` to `Z`. Only called with columns in range; the `?`
+/// merely keeps the function total.
+fn column_letter(col: Int) -> String {
   case col >= 0 && col < num_cols, string.utf_codepoint(65 + col) {
     True, Ok(codepoint) -> string.from_utf_codepoints([codepoint])
     _, _ -> "?"
