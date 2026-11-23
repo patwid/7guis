@@ -147,6 +147,12 @@ pub fn clearing_a_cell_test() {
   assert value(s, "A1") == Number(1.0)
 }
 
+pub fn formula_reading_a_blank_cell_is_zero_test() {
+  let s = sheet.new() |> with([#("A0", "=B0")])
+
+  assert value(s, "A0") == Number(0.0)
+}
+
 pub fn self_reference_is_circular_test() {
   let s = sheet.new() |> with([#("A0", "=add(A0,1)")])
 

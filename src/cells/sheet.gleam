@@ -17,6 +17,8 @@ import gleam/string
 
 /// What a cell evaluates to.
 pub type Value {
+  /// A blank cell. A formula never evaluates to it: a blank cell it reads
+  /// counts as `0`, as in other spreadsheets.
   Empty
   Number(Float)
   Text(String)
@@ -291,7 +293,11 @@ fn evaluate(content: Content, values: Dict(CellRef, Value)) -> Value {
   case content {
     Constant(n) -> Number(n)
     Label(s) -> Text(s)
-    Formula(expr) -> evaluate_expr(expr, values)
+    Formula(expr) ->
+      case evaluate_expr(expr, values) {
+        Empty -> Number(0.0)
+        value -> value
+      }
     Malformed -> Failed(ParseError)
   }
 }
