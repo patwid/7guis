@@ -1,11 +1,10 @@
-import gleam/dict.{type Dict}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre
-import lustre/attribute
+import lustre/attribute.{type Attribute}
 import lustre/element.{type Element}
 import lustre/element/html
 import lustre/event
@@ -19,16 +18,19 @@ pub fn main() {
 
 type Model {
   Model(
-    people: Dict(PersonId, Person),
-    next_id: Int,
+    people: People,
     selected: Option(PersonId),
     draft: Person,
     query: String,
   )
 }
 
-/// Identifies a person independently of its position in the (filtered)
-/// list. Ids increase monotonically, so they also give the insertion order.
+/// The people in creation order, which is also the order they are listed in.
+/// Ids increase along the list.
+type People =
+  List(#(PersonId, Person))
+
+/// Identifies a person independently of its position in the (filtered) list.
 type PersonId {
   PersonId(Int)
 }
@@ -40,19 +42,13 @@ type Person {
 const empty_person = Person(name: "", surname: "")
 
 fn init(_: flags) -> Model {
-  Model(
-    people: dict.new(),
-    next_id: 0,
-    selected: None,
-    draft: empty_person,
-    query: "",
-  )
+  Model(people: [], selected: None, draft: empty_person, query: "")
 }
 
 type Msg {
-  UserCreatedPerson
-  UserUpdatedPerson
-  UserDeletedPerson
+  UserClickedCreate
+  UserClickedUpdate(PersonId)
+  UserClickedDelete(PersonId)
   UserSelectedPerson(PersonId)
   UserUpdatedName(String)
   UserUpdatedSurname(String)
@@ -60,63 +56,75 @@ type Msg {
 }
 
 fn update(model: Model, msg: Msg) -> Model {
-  case msg, model.selected {
-    UserCreatedPerson, _ ->
+  case msg {
+    UserClickedCreate ->
       Model(
         ..model,
-        people: dict.insert(model.people, PersonId(model.next_id), model.draft),
-        next_id: model.next_id + 1,
+        people: list.append(model.people, [
+          #(next_id(model.people), model.draft),
+        ]),
         selected: None,
         draft: empty_person,
       )
 
-    UserUpdatedPerson, Some(id) ->
+    UserClickedUpdate(id) ->
       Model(
         ..model,
-        people: dict.insert(model.people, id, model.draft),
+        people: list.map(model.people, fn(entry) {
+          case entry.0 == id {
+            True -> #(id, model.draft)
+            False -> entry
+          }
+        }),
         selected: None,
         draft: empty_person,
       )
 
-    UserDeletedPerson, Some(id) ->
+    UserClickedDelete(id) ->
       Model(
         ..model,
-        people: dict.delete(model.people, id),
+        people: list.filter(model.people, fn(entry) { entry.0 != id }),
         selected: None,
         draft: empty_person,
       )
 
-    UserSelectedPerson(id), _ ->
-      case dict.get(model.people, id) {
+    UserSelectedPerson(id) ->
+      case list.key_find(model.people, id) {
         Ok(person) -> Model(..model, selected: Some(id), draft: person)
         Error(_) -> model
       }
 
-    UserUpdatedName(name), _ ->
-      Model(..model, draft: Person(..model.draft, name:))
+    UserUpdatedName(name) -> Model(..model, draft: Person(..model.draft, name:))
 
-    UserUpdatedSurname(surname), _ ->
+    UserUpdatedSurname(surname) ->
       Model(..model, draft: Person(..model.draft, surname:))
 
-    // Deselect a person that is no longer visible with the new filter.
-    UserUpdatedQuery(query), selected -> {
-      let selected =
-        option.then(selected, fn(id) {
-          case dict.get(model.people, id) {
-            Ok(person) ->
-              case matches(person, query) {
-                True -> Some(id)
-                False -> None
-              }
-            Error(_) -> None
+    UserUpdatedQuery(query) -> {
+      let selection_hidden = case model.selected {
+        Some(id) ->
+          case list.key_find(model.people, id) {
+            Ok(person) -> !matches(person, query)
+            Error(_) -> True
           }
-        })
+        None -> False
+      }
 
-      Model(..model, selected:, query:)
+      case selection_hidden {
+        // Deselect a person that is no longer visible with the new filter,
+        // and drop the form contents that belonged to it.
+        True ->
+          Model(..model, selected: None, draft: empty_person, query: query)
+        False -> Model(..model, query: query)
+      }
     }
+  }
+}
 
-    // Update and delete need a selection; the buttons are disabled otherwise.
-    UserUpdatedPerson, None | UserDeletedPerson, None -> model
+/// The id for the next person: one more than the newest.
+fn next_id(people: People) -> PersonId {
+  case list.last(people) {
+    Ok(#(PersonId(last), _)) -> PersonId(last + 1)
+    Error(_) -> PersonId(0)
   }
 }
 
@@ -124,25 +132,17 @@ fn matches(person: Person, query: String) -> Bool {
   string.starts_with(string.lowercase(person.surname), string.lowercase(query))
 }
 
-/// The people matching the current filter, in insertion order.
-fn visible_people(model: Model) -> List(#(PersonId, Person)) {
-  model.people
-  |> dict.to_list
-  |> list.filter(fn(entry) { matches(entry.1, model.query) })
-  |> list.sort(fn(a, b) {
-    let PersonId(a) = a.0
-    let PersonId(b) = b.0
-    int.compare(a, b)
-  })
+/// The people matching the current filter, in creation order.
+fn visible_people(model: Model) -> People {
+  list.filter(model.people, fn(entry) { matches(entry.1, model.query) })
 }
 
 fn view(model: Model) -> Element(Msg) {
-  let no_selection = option.is_none(model.selected)
-
   html.div([attribute.class("column")], [
     view_input(
       value: model.query,
       label: "Filter prefix:",
+      label_attributes: [],
       on_input: UserUpdatedQuery,
     ),
     html.div(
@@ -165,14 +165,16 @@ fn view(model: Model) -> Element(Msg) {
             attribute.style("align-items", "center"),
           ],
           [
-            view_grid_input(
+            view_input(
               value: model.draft.name,
               label: "Name:",
+              label_attributes: grid_row,
               on_input: UserUpdatedName,
             ),
-            view_grid_input(
+            view_input(
               value: model.draft.surname,
               label: "Surname:",
+              label_attributes: grid_row,
               on_input: UserUpdatedSurname,
             ),
           ],
@@ -180,51 +182,45 @@ fn view(model: Model) -> Element(Msg) {
       ],
     ),
     html.div([attribute.class("row")], [
-      view_button(label: "Create", on_click: UserCreatedPerson, disabled: False),
+      view_button(label: "Create", on_click: Some(UserClickedCreate)),
+      // Update and delete only exist for a selected person.
       view_button(
         label: "Update",
-        on_click: UserUpdatedPerson,
-        disabled: no_selection,
+        on_click: option.map(model.selected, UserClickedUpdate),
       ),
       view_button(
         label: "Delete",
-        on_click: UserDeletedPerson,
-        disabled: no_selection,
+        on_click: option.map(model.selected, UserClickedDelete),
       ),
     ]),
   ])
 }
 
+const grid_row = [#("display", "contents")]
+
 fn view_input(
   value value: String,
   label label: String,
+  label_attributes styles: List(#(String, String)),
   on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
-  html.label([], [
+  html.label([attribute.styles(styles)], [
     html.text(label),
     html.input([attribute.value(value), event.on_input(handle_input)]),
   ])
 }
 
-fn view_grid_input(
-  value value: String,
-  label label: String,
-  on_input handle_input: fn(String) -> Msg,
-) -> Element(Msg) {
-  html.label([attribute.style("display", "contents")], [
-    html.text(label),
-    html.input([attribute.value(value), event.on_input(handle_input)]),
-  ])
-}
-
+/// A button that is disabled when there is nothing for it to send.
 fn view_button(
   label label: String,
-  on_click handle_click: Msg,
-  disabled disabled: Bool,
+  on_click on_click: Option(Msg),
 ) -> Element(Msg) {
-  html.button([event.on_click(handle_click), attribute.disabled(disabled)], [
-    html.text(label),
-  ])
+  let attributes: List(Attribute(Msg)) = case on_click {
+    Some(msg) -> [event.on_click(msg)]
+    None -> [attribute.disabled(True)]
+  }
+
+  html.button(attributes, [html.text(label)])
 }
 
 fn view_person_options(model: Model) -> List(Element(Msg)) {
