@@ -317,6 +317,7 @@ fn view_menu(model: Model) -> Element(Msg) {
       attribute.id(menu_id),
       attribute.property("modalopen", json.bool(open)),
       on_backdrop_click(menu_id, UserClosedMenu),
+      on_close(UserClosedMenu),
     ],
     [
       html.div([event.on_click(UserClickedAdjustDiameter)], [
@@ -362,6 +363,7 @@ fn view_dialog(model: Model) -> Element(Msg) {
       attribute.id(dialog_id),
       attribute.property("modalopen", json.bool(option.is_some(adjusting))),
       on_backdrop_click(dialog_id, UserClosedDialog),
+      on_close(UserClosedDialog),
     ],
     content,
   )
@@ -420,6 +422,15 @@ fn diameter_decoder() -> Decoder(Msg) {
     Ok(diameter) -> decode.success(UserAdjustedDiameter(diameter))
     Error(_) -> decode.failure(UserAdjustedDiameter(0), "diameter")
   }
+}
+
+/// Fires `msg` whenever the dialog closes, however that happens. The browser
+/// closes a modal dialog on its own, e.g. on Escape, and the model must follow
+/// or it would stay in a state that ignores all canvas input. Closing it from
+/// the model fires this too; the message is then ignored, as the interaction
+/// has already moved on.
+fn on_close(msg: Msg) -> Attribute(Msg) {
+  event.on("close", decode.success(msg))
 }
 
 /// Fires `msg` only for clicks on the dialog element itself (its backdrop),
