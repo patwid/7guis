@@ -41,15 +41,19 @@ type Booking {
   ReturnBooking(start: Date, return: Date)
 }
 
-/// Why a date field does not make a booking.
-type Problem {
-  Unreadable
-  BeforeStart
+/// The date fields after checking, each with its date or why it has none.
+/// The start date can only be unreadable; only the return date can also be
+/// out of order. `return` is `None` for a one-way flight, which ignores it.
+type Checked {
+  Checked(
+    start: Result(Date, Nil),
+    return: Option(Result(Date, ReturnProblem)),
+  )
 }
 
-/// The problem of each field, if any.
-type Problems {
-  Problems(start: Option(Problem), return: Option(Problem))
+type ReturnProblem {
+  Unreadable
+  BeforeStart
 }
 
 /// Starts with both dates set to `today`, the user's local date.
@@ -73,33 +77,40 @@ fn update(model: Model, msg: Msg) -> Model {
   }
 }
 
-/// Validates the input; all problems are reported, not just the first.
-fn booking(model: Model) -> Result(Booking, Problems) {
+/// Checks every field on its own, so all problems are reported, not just the
+/// first.
+fn check(model: Model) -> Checked {
   let start = parse_date(model.start)
+  let return = case model.flight {
+    OneWay -> None
+    Return -> Some(check_return(start, parse_date(model.return)))
+  }
 
-  case model.flight {
-    OneWay ->
-      case start {
-        Ok(date) -> Ok(OneWayBooking(date))
-        Error(_) -> Error(Problems(start: Some(Unreadable), return: None))
+  Checked(start:, return:)
+}
+
+/// A return date can only be out of order with a readable start date.
+fn check_return(
+  start: Result(Date, Nil),
+  return: Result(Date, Nil),
+) -> Result(Date, ReturnProblem) {
+  case start, return {
+    _, Error(_) -> Error(Unreadable)
+    Ok(start), Ok(return) ->
+      case calendar.naive_date_compare(start, return) {
+        order.Gt -> Error(BeforeStart)
+        order.Lt | order.Eq -> Ok(return)
       }
-    Return ->
-      case start, parse_date(model.return) {
-        Ok(start), Ok(return) ->
-          case calendar.naive_date_compare(start, return) {
-            order.Gt -> Error(Problems(start: None, return: Some(BeforeStart)))
-            order.Lt | order.Eq -> Ok(ReturnBooking(start:, return:))
-          }
-        start, return ->
-          Error(Problems(start: unreadable(start), return: unreadable(return)))
-      }
+    Error(_), Ok(return) -> Ok(return)
   }
 }
 
-fn unreadable(date: Result(Date, Nil)) -> Option(Problem) {
-  case date {
-    Ok(_) -> None
-    Error(_) -> Some(Unreadable)
+/// The booking the checked fields make, if every field used has a date.
+fn booking(checked: Checked) -> Option(Booking) {
+  case checked.start, checked.return {
+    Ok(start), None -> Some(OneWayBooking(start))
+    Ok(start), Some(Ok(return)) -> Some(ReturnBooking(start:, return:))
+    _, _ -> None
   }
 }
 
@@ -116,58 +127,71 @@ fn view(model: Model) -> Element(Msg) {
       )
     })
 
-  let booking = booking(model)
-  let problems = case booking {
-    Ok(_) -> Problems(start: None, return: None)
-    Error(problems) -> problems
+  let checked = check(model)
+  let booking = booking(checked)
+
+  let start_problem = case checked.start {
+    Ok(_) -> None
+    Error(_) -> Some(unreadable_message)
+  }
+  let return_problem = case checked.return {
+    Some(Error(Unreadable)) -> Some(unreadable_message)
+    Some(Error(BeforeStart)) -> Some("The return date is before the start date")
+    Some(Ok(_)) | None -> None
   }
 
   html.div([attribute.class("column")], [
     html.select([event.on("input", flight_decoder())], flight_options),
     view_date_input(
       value: model.start,
-      invalid: option.is_some(problems.start),
+      problem: start_problem,
       disabled: False,
       on_input: UserUpdatedStart,
     ),
     view_date_input(
       value: model.return,
-      invalid: option.is_some(problems.return),
+      problem: return_problem,
       disabled: model.flight == OneWay,
       on_input: UserUpdatedReturn,
     ),
     html.button(
       [
-        attribute.disabled(result.is_error(booking)),
+        attribute.disabled(option.is_none(booking)),
         attribute.attribute("popovertarget", "booking"),
       ],
       [html.text("Book")],
     ),
     html.div([attribute.id("booking"), attribute.attribute("popover", "")], [
       html.text(case booking {
-        Ok(booking) -> format_booking(booking)
-        Error(_) -> ""
+        Some(booking) -> format_booking(booking)
+        None -> ""
       }),
     ]),
   ])
 }
 
+const unreadable_message = "Not a date in the form d.m.yyyy"
+
+/// An invalid field is highlighted and explains its problem on hover.
 fn view_date_input(
   value value: String,
-  invalid invalid: Bool,
+  problem problem: Option(String),
   disabled disabled: Bool,
   on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
-  let styles = case invalid {
-    True -> [#("background", "lightcoral")]
-    False -> []
+  let problem_attributes = case problem {
+    Some(message) -> [
+      attribute.style("background", "lightcoral"),
+      attribute.title(message),
+    ]
+    None -> []
   }
 
   html.input([
-    attribute.styles(styles),
     attribute.value(value),
     attribute.disabled(disabled),
     event.on_input(handle_input),
+    ..problem_attributes
   ])
 }
 
