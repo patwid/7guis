@@ -26,8 +26,11 @@ pub fn main() {
 
 /// The date fields hold the text exactly as typed; dates are parsed from it
 /// on demand, so the user's input is never reformatted while typing.
+///
+/// `booked` is the booking last made, shown as a confirmation. Any edit
+/// clears it, so it always matches the fields.
 type Model {
-  Model(flight: Flight, start: String, return: String)
+  Model(flight: Flight, start: String, return: String, booked: Option(Booking))
 }
 
 type Flight {
@@ -58,20 +61,22 @@ type ReturnProblem {
 fn init(today: Date) -> Model {
   let today = format_date(today)
 
-  Model(flight: OneWay, start: today, return: today)
+  Model(flight: OneWay, start: today, return: today, booked: None)
 }
 
 type Msg {
   UserSelectedFlight(Flight)
   UserUpdatedStart(String)
   UserUpdatedReturn(String)
+  UserClickedBook
 }
 
 fn update(model: Model, msg: Msg) -> Model {
   case msg {
-    UserSelectedFlight(flight) -> Model(..model, flight:)
-    UserUpdatedStart(start) -> Model(..model, start:)
-    UserUpdatedReturn(return) -> Model(..model, return:)
+    UserSelectedFlight(flight) -> Model(..model, flight:, booked: None)
+    UserUpdatedStart(start) -> Model(..model, start:, booked: None)
+    UserUpdatedReturn(return) -> Model(..model, return:, booked: None)
+    UserClickedBook -> Model(..model, booked: booking(check(model)))
   }
 }
 
@@ -160,16 +165,14 @@ fn view(model: Model) -> Element(Msg) {
     html.button(
       [
         attribute.disabled(option.is_none(booking)),
-        attribute.attribute("popovertarget", "booking"),
+        event.on_click(UserClickedBook),
       ],
       [html.text("Book")],
     ),
-    html.div([attribute.id("booking"), attribute.attribute("popover", "")], [
-      html.text(case booking {
-        Some(booking) -> format_booking(booking)
-        None -> ""
-      }),
-    ]),
+    case model.booked {
+      Some(booked) -> html.p([], [html.text(format_booking(booked))])
+      None -> element.none()
+    },
   ])
 }
 
