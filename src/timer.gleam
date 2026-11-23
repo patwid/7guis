@@ -17,11 +17,11 @@ pub fn main() {
   Nil
 }
 
-/// `elapsed` never exceeds `duration`. `last_tick` is when `elapsed` was last
-/// brought up to date; the next tick adds the time that really passed since,
-/// so late or throttled ticks (e.g. in a background tab) lose no time.
+/// `elapsed` never exceeds `duration`. `measured_until` is the instant
+/// `elapsed` is measured up to; the next tick adds the time that really passed
+/// since, so late or throttled ticks (e.g. in a background tab) lose no time.
 type Model {
-  Model(elapsed: Duration, duration: Duration, last_tick: Instant)
+  Model(elapsed: Duration, duration: Duration, measured_until: Instant)
 }
 
 /// A point in time on the browser's monotonic clock (`performance.now()`,
@@ -46,7 +46,7 @@ fn init(started: Instant) -> #(Model, Effect(Msg)) {
     Model(
       elapsed: duration.milliseconds(0),
       duration: duration.seconds(15),
-      last_tick: started,
+      measured_until: started,
     ),
     every(tick_ms, TimerTicked),
   )
@@ -91,16 +91,16 @@ type Msg {
 
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
-    // Ticks keep moving `last_tick` even once the duration is reached, so a
-    // longer duration resumes from that moment rather than catching up.
+    // Ticks keep moving `measured_until` even once the duration is reached,
+    // so a longer duration resumes from that moment rather than catching up.
     TimerTicked(now) -> {
       // A tick stamped before a reset can still arrive after it; time must
       // not run backwards then.
-      let now = latest(model.last_tick, now)
+      let now = latest(model.measured_until, now)
       let elapsed =
-        duration.add(model.elapsed, time_between(model.last_tick, now))
+        duration.add(model.elapsed, time_between(model.measured_until, now))
         |> min(model.duration)
-      #(Model(..model, elapsed:, last_tick: now), effect.none())
+      #(Model(..model, elapsed:, measured_until: now), effect.none())
     }
 
     UserUpdatedDuration(duration) -> {
@@ -112,7 +112,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     }
 
     UserResetTimer(at) -> #(
-      Model(..model, elapsed: duration.milliseconds(0), last_tick: at),
+      Model(..model, elapsed: duration.milliseconds(0), measured_until: at),
       effect.none(),
     )
   }
