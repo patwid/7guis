@@ -1,6 +1,7 @@
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/pair
 import gleam/result
@@ -37,11 +38,15 @@ type Booking {
   ReturnBooking(start: Date, return: Date)
 }
 
-/// Why the input does not make a booking.
+/// Why a date field does not make a booking.
 type Problem {
-  InvalidStart
-  InvalidReturn
-  ReturnBeforeStart
+  Unreadable
+  BeforeStart
+}
+
+/// The problem of each field, if any.
+type Problems {
+  Problems(start: Option(Problem), return: Option(Problem))
 }
 
 fn init(_: flags) -> Model {
@@ -67,26 +72,32 @@ fn update(model: Model, msg: Msg) -> Model {
 }
 
 /// Validates the input; all problems are reported, not just the first.
-fn booking(model: Model) -> Result(Booking, List(Problem)) {
+fn booking(model: Model) -> Result(Booking, Problems) {
   let start = parse_date(model.start)
 
   case model.flight {
     OneWay ->
       case start {
         Ok(date) -> Ok(OneWayBooking(date))
-        Error(_) -> Error([InvalidStart])
+        Error(_) -> Error(Problems(start: Some(Unreadable), return: None))
       }
     Return ->
       case start, parse_date(model.return) {
         Ok(start), Ok(return) ->
           case calendar.naive_date_compare(start, return) {
-            order.Gt -> Error([ReturnBeforeStart])
+            order.Gt -> Error(Problems(start: None, return: Some(BeforeStart)))
             order.Lt | order.Eq -> Ok(ReturnBooking(start:, return:))
           }
-        Error(_), Ok(_) -> Error([InvalidStart])
-        Ok(_), Error(_) -> Error([InvalidReturn])
-        Error(_), Error(_) -> Error([InvalidStart, InvalidReturn])
+        start, return ->
+          Error(Problems(start: unreadable(start), return: unreadable(return)))
       }
+  }
+}
+
+fn unreadable(date: Result(Date, Nil)) -> Option(Problem) {
+  case date {
+    Ok(_) -> None
+    Error(_) -> Some(Unreadable)
   }
 }
 
@@ -105,7 +116,7 @@ fn view(model: Model) -> Element(Msg) {
 
   let booking = booking(model)
   let problems = case booking {
-    Ok(_) -> []
+    Ok(_) -> Problems(start: None, return: None)
     Error(problems) -> problems
   }
 
@@ -113,14 +124,13 @@ fn view(model: Model) -> Element(Msg) {
     html.select([event.on("input", flight_decoder())], flight_options),
     view_date_input(
       value: model.start,
-      invalid: list.contains(problems, InvalidStart),
+      invalid: option.is_some(problems.start),
       disabled: False,
       on_input: UserUpdatedStart,
     ),
     view_date_input(
       value: model.return,
-      invalid: list.contains(problems, InvalidReturn)
-        || list.contains(problems, ReturnBeforeStart),
+      invalid: option.is_some(problems.return),
       disabled: model.flight == OneWay,
       on_input: UserUpdatedReturn,
     ),
