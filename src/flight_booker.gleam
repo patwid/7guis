@@ -37,6 +37,13 @@ type Booking {
   ReturnBooking(start: Date, return: Date)
 }
 
+/// Why the input does not make a booking.
+type Problem {
+  InvalidStart
+  InvalidReturn
+  ReturnBeforeStart
+}
+
 fn init(_: flags) -> Model {
   let #(today, _) =
     timestamp.system_time() |> timestamp.to_calendar(calendar.utc_offset)
@@ -59,39 +66,61 @@ fn update(model: Model, msg: Msg) -> Model {
   }
 }
 
-fn booking(model: Model) -> Result(Booking, Nil) {
-  use start <- result.try(parse_date(model.start))
+/// Validates the input; all problems are reported, not just the first.
+fn booking(model: Model) -> Result(Booking, List(Problem)) {
+  let start = parse_date(model.start)
+
   case model.flight {
-    OneWay -> Ok(OneWayBooking(start))
-    Return -> {
-      use return <- result.try(parse_date(model.return))
-      case calendar.naive_date_compare(start, return) {
-        order.Gt -> Error(Nil)
-        order.Lt | order.Eq -> Ok(ReturnBooking(start:, return:))
+    OneWay ->
+      case start {
+        Ok(date) -> Ok(OneWayBooking(date))
+        Error(_) -> Error([InvalidStart])
       }
-    }
+    Return ->
+      case start, parse_date(model.return) {
+        Ok(start), Ok(return) ->
+          case calendar.naive_date_compare(start, return) {
+            order.Gt -> Error([ReturnBeforeStart])
+            order.Lt | order.Eq -> Ok(ReturnBooking(start:, return:))
+          }
+        Error(_), Ok(_) -> Error([InvalidStart])
+        Ok(_), Error(_) -> Error([InvalidReturn])
+        Error(_), Error(_) -> Error([InvalidStart, InvalidReturn])
+      }
   }
 }
 
 fn view(model: Model) -> Element(Msg) {
   let flight_options =
     [OneWay, Return]
-    |> list.map(format_flight)
-    |> list.map(fn(value) {
-      html.option([attribute.value(value)], value <> " flight")
+    |> list.map(fn(flight) {
+      html.option(
+        [
+          attribute.value(format_flight(flight)),
+          attribute.selected(flight == model.flight),
+        ],
+        format_flight(flight) <> " flight",
+      )
     })
 
   let booking = booking(model)
+  let problems = case booking {
+    Ok(_) -> []
+    Error(problems) -> problems
+  }
 
   html.div([attribute.class("column")], [
     html.select([event.on("input", flight_decoder())], flight_options),
     view_date_input(
       value: model.start,
+      invalid: list.contains(problems, InvalidStart),
       disabled: False,
       on_input: UserUpdatedStart,
     ),
     view_date_input(
       value: model.return,
+      invalid: list.contains(problems, InvalidReturn)
+        || list.contains(problems, ReturnBeforeStart),
       disabled: model.flight == OneWay,
       on_input: UserUpdatedReturn,
     ),
@@ -113,12 +142,13 @@ fn view(model: Model) -> Element(Msg) {
 
 fn view_date_input(
   value value: String,
+  invalid invalid: Bool,
   disabled disabled: Bool,
   on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
-  let styles = case parse_date(value), disabled {
-    Error(_), False -> [#("background", "lightcoral")]
-    _, _ -> []
+  let styles = case invalid {
+    True -> [#("background", "lightcoral")]
+    False -> []
   }
 
   html.input([
