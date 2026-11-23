@@ -79,13 +79,12 @@ pub fn range(from: CellRef, to: CellRef) -> List(CellRef) {
   })
 }
 
-/// The column name, `A` to `Z`. Only called with columns in range; the `?`
-/// merely keeps the function total.
+/// The column name, `A` to `Z`. Only called with columns in range.
 fn column_letter(col: Int) -> String {
-  case col >= 0 && col < num_cols, string.utf_codepoint(65 + col) {
-    True, Ok(codepoint) -> string.from_utf_codepoints([codepoint])
-    _, _ -> "?"
-  }
+  let assert True = col >= 0 && col < num_cols
+    as "column_letter is only called with columns in range"
+  let assert Ok(codepoint) = string.utf_codepoint(65 + col)
+  string.from_utf_codepoints([codepoint])
 }
 
 /// Parses a reference such as `B12` from the start of `input` and returns

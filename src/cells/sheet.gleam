@@ -334,9 +334,10 @@ fn strong_connect(
   }
 }
 
-/// Only called for cells the search has reached, which always have one.
 fn low_link(search: Search, ref: CellRef) -> Int {
-  dict.get(search.low_link, ref) |> result.unwrap(0)
+  let assert Ok(link) = dict.get(search.low_link, ref)
+    as "low_link is only read for cells the search has reached"
+  link
 }
 
 fn lower_link(search: Search, ref: CellRef, candidate: Int) -> Search {
