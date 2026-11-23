@@ -30,7 +30,12 @@ type Model {
 /// The circles in creation order, which is also the order they are drawn in
 /// (later circles on top). Ids increase along the list.
 type Circles =
-  List(#(CircleId, Circle))
+  List(Entry)
+
+/// A circle together with the id it is known by.
+type Entry {
+  Entry(id: CircleId, circle: Circle)
+}
 
 type CircleId {
   CircleId(Int)
@@ -110,7 +115,7 @@ fn update_model(model: Model, msg: Msg) -> Model {
           Model(
             history: history_push(
               model.history,
-              list.append(circles, [#(next_id(circles), circle)]),
+              list.append(circles, [Entry(id: next_id(circles), circle:)]),
             ),
             interaction: Idle(pointer: Some(position)),
           )
@@ -130,7 +135,7 @@ fn update_model(model: Model, msg: Msg) -> Model {
     UserLeftCanvas, Idle(_) -> Model(..model, interaction: Idle(pointer: None))
 
     UserClickedAdjustDiameter, MenuOpen(id) ->
-      case list.key_find(circles, id) {
+      case find_circle(circles, id) {
         Ok(circle) ->
           Model(..model, interaction: Adjusting(id, circle.diameter))
         // The menu only opens for an existing circle and the history cannot
@@ -153,7 +158,7 @@ fn update_model(model: Model, msg: Msg) -> Model {
       )
 
     UserClosedDialog, Adjusting(id, diameter) -> {
-      let history = case list.key_find(circles, id) {
+      let history = case find_circle(circles, id) {
         Ok(circle) if circle.diameter != diameter ->
           history_push(model.history, set_diameter(circles, id, diameter))
         _ -> model.history
@@ -178,15 +183,20 @@ fn update_model(model: Model, msg: Msg) -> Model {
 /// circles, so undoing a creation also frees its id.
 fn next_id(circles: Circles) -> CircleId {
   case list.last(circles) {
-    Ok(#(CircleId(last), _)) -> CircleId(last + 1)
+    Ok(Entry(id: CircleId(last), ..)) -> CircleId(last + 1)
     Error(_) -> CircleId(0)
   }
 }
 
+fn find_circle(circles: Circles, id: CircleId) -> Result(Circle, Nil) {
+  list.find(circles, fn(entry) { entry.id == id })
+  |> result.map(fn(entry) { entry.circle })
+}
+
 fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
   list.map(circles, fn(entry) {
-    case entry.0 == id {
-      True -> #(id, Circle(..entry.1, diameter:))
+    case entry.id == id {
+      True -> Entry(..entry, circle: Circle(..entry.circle, diameter:))
       False -> entry
     }
   })
@@ -196,14 +206,14 @@ fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
 /// near ones, the topmost.
 fn circle_at(circles: Circles, position: Position) -> Option(CircleId) {
   circles
-  |> list.filter(fn(entry) { contains(entry.1, position) })
-  |> list.fold(None, fn(best: Option(#(CircleId, Circle)), entry) {
+  |> list.filter(fn(entry) { contains(entry.circle, position) })
+  |> list.fold(None, fn(best: Option(Entry), entry) {
     case best {
       Some(current) ->
         case
           int.compare(
-            square_distance(entry.1.center, position),
-            square_distance(current.1.center, position),
+            square_distance(entry.circle.center, position),
+            square_distance(current.circle.center, position),
           )
         {
           order.Gt -> best
@@ -212,7 +222,7 @@ fn circle_at(circles: Circles, position: Position) -> Option(CircleId) {
       None -> Some(entry)
     }
   })
-  |> option.map(fn(entry) { entry.0 })
+  |> option.map(fn(entry) { entry.id })
 }
 
 fn contains(circle: Circle, position: Position) -> Bool {
@@ -330,7 +340,7 @@ fn view_menu(model: Model) -> Element(Msg) {
 fn view_dialog(model: Model) -> Element(Msg) {
   let adjusting = case model.interaction {
     Adjusting(id, diameter) ->
-      list.key_find(model.history.present, id)
+      find_circle(model.history.present, id)
       |> result.map(fn(circle) { Circle(..circle, diameter:) })
       |> option.from_result
     _ -> None
@@ -377,7 +387,7 @@ fn view_circles(model: Model) -> List(Element(Msg)) {
 
   displayed_circles(model)
   |> list.map(fn(entry) {
-    let #(id, circle) = entry
+    let Entry(id:, circle:) = entry
     view_circle(circle, highlighted == Some(id))
   })
 }

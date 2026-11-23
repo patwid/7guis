@@ -2,6 +2,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import lustre
 import lustre/attribute
@@ -29,7 +30,12 @@ type Model {
 
 /// The people in creation order, which is also the order they are listed in.
 type People =
-  List(#(PersonId, Person))
+  List(Entry)
+
+/// A person together with the id it is known by.
+type Entry {
+  Entry(id: PersonId, person: Person)
+}
 
 /// Identifies a person independently of its position in the (filtered) list.
 type PersonId {
@@ -69,7 +75,9 @@ fn update(model: Model, msg: Msg) -> Model {
 
       Model(
         ..model,
-        people: list.append(model.people, [#(model.next_id, model.draft)]),
+        people: list.append(model.people, [
+          Entry(id: model.next_id, person: model.draft),
+        ]),
         next_id: PersonId(id + 1),
         selected: None,
         draft: empty_person,
@@ -79,8 +87,8 @@ fn update(model: Model, msg: Msg) -> Model {
     UserClickedUpdate ->
       change_selected(model, fn(people, id) {
         list.map(people, fn(entry) {
-          case entry.0 == id {
-            True -> #(id, model.draft)
+          case entry.id == id {
+            True -> Entry(..entry, person: model.draft)
             False -> entry
           }
         })
@@ -88,11 +96,11 @@ fn update(model: Model, msg: Msg) -> Model {
 
     UserClickedDelete ->
       change_selected(model, fn(people, id) {
-        list.filter(people, fn(entry) { entry.0 != id })
+        list.filter(people, fn(entry) { entry.id != id })
       })
 
     UserSelectedPerson(id) ->
-      case list.key_find(model.people, id) {
+      case find_person(model.people, id) {
         Ok(person) -> Model(..model, selected: Some(id), draft: person)
         Error(_) -> model
       }
@@ -105,7 +113,7 @@ fn update(model: Model, msg: Msg) -> Model {
     UserUpdatedQuery(query) -> {
       let selection_hidden = case model.selected {
         Some(id) ->
-          case list.key_find(model.people, id) {
+          case find_person(model.people, id) {
             Ok(person) -> !matches(person, query)
             Error(_) -> True
           }
@@ -142,13 +150,18 @@ fn change_selected(
   }
 }
 
+fn find_person(people: People, id: PersonId) -> Result(Person, Nil) {
+  list.find(people, fn(entry) { entry.id == id })
+  |> result.map(fn(entry) { entry.person })
+}
+
 fn matches(person: Person, query: String) -> Bool {
   string.starts_with(string.lowercase(person.surname), string.lowercase(query))
 }
 
 /// The people matching the current filter, in creation order.
 fn visible_people(model: Model) -> People {
-  list.filter(model.people, fn(entry) { matches(entry.1, model.query) })
+  list.filter(model.people, fn(entry) { matches(entry.person, model.query) })
 }
 
 fn view(model: Model) -> Element(Msg) {
@@ -238,7 +251,7 @@ fn view_button(
 fn view_person_options(model: Model) -> List(Element(Msg)) {
   visible_people(model)
   |> list.map(fn(entry) {
-    let #(id, person) = entry
+    let Entry(id:, person:) = entry
     let PersonId(value) = id
 
     html.option(
