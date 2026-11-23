@@ -45,10 +45,7 @@ type Booking {
 /// The start date can only be unreadable; only the return date can also be
 /// out of order. `return` is `None` for a one-way flight, which ignores it.
 type Checked {
-  Checked(
-    start: Result(Date, Nil),
-    return: Option(Result(Date, ReturnProblem)),
-  )
+  Checked(start: Result(Date, Nil), return: Option(Result(Date, ReturnProblem)))
 }
 
 type ReturnProblem {
