@@ -4,7 +4,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import lustre
-import lustre/attribute.{type Attribute}
+import lustre/attribute
 import lustre/element.{type Element}
 import lustre/element/html
 import lustre/event
@@ -54,8 +54,8 @@ fn init(_: flags) -> Model {
 
 type Msg {
   UserClickedCreate
-  UserClickedUpdate(PersonId)
-  UserClickedDelete(PersonId)
+  UserClickedUpdate
+  UserClickedDelete
   UserSelectedPerson(PersonId)
   UserUpdatedName(String)
   UserUpdatedSurname(String)
@@ -76,26 +76,20 @@ fn update(model: Model, msg: Msg) -> Model {
       )
     }
 
-    UserClickedUpdate(id) ->
-      Model(
-        ..model,
-        people: list.map(model.people, fn(entry) {
+    UserClickedUpdate ->
+      change_selected(model, fn(people, id) {
+        list.map(people, fn(entry) {
           case entry.0 == id {
             True -> #(id, model.draft)
             False -> entry
           }
-        }),
-        selected: None,
-        draft: empty_person,
-      )
+        })
+      })
 
-    UserClickedDelete(id) ->
-      Model(
-        ..model,
-        people: list.filter(model.people, fn(entry) { entry.0 != id }),
-        selected: None,
-        draft: empty_person,
-      )
+    UserClickedDelete ->
+      change_selected(model, fn(people, id) {
+        list.filter(people, fn(entry) { entry.0 != id })
+      })
 
     UserSelectedPerson(id) ->
       case list.key_find(model.people, id) {
@@ -126,6 +120,25 @@ fn update(model: Model, msg: Msg) -> Model {
         False -> Model(..model, query: query)
       }
     }
+  }
+}
+
+/// Changes the people with the id of the selected person, then clears the
+/// selection and the form. `selected` is the only record of which person the
+/// buttons act on; without a selection, nothing happens.
+fn change_selected(
+  model: Model,
+  change: fn(People, PersonId) -> People,
+) -> Model {
+  case model.selected {
+    Some(id) ->
+      Model(
+        ..model,
+        people: change(model.people, id),
+        selected: None,
+        draft: empty_person,
+      )
+    None -> model
   }
 }
 
@@ -183,15 +196,16 @@ fn view(model: Model) -> Element(Msg) {
       ],
     ),
     html.div([attribute.class("row")], [
-      view_button(label: "Create", on_click: Some(UserClickedCreate)),
-      // Update and delete only exist for a selected person.
+      view_button(label: "Create", on_click: UserClickedCreate, enabled: True),
       view_button(
         label: "Update",
-        on_click: option.map(model.selected, UserClickedUpdate),
+        on_click: UserClickedUpdate,
+        enabled: option.is_some(model.selected),
       ),
       view_button(
         label: "Delete",
-        on_click: option.map(model.selected, UserClickedDelete),
+        on_click: UserClickedDelete,
+        enabled: option.is_some(model.selected),
       ),
     ]),
   ])
@@ -211,17 +225,14 @@ fn view_input(
   ])
 }
 
-/// A button that is disabled when there is nothing for it to send.
 fn view_button(
   label label: String,
-  on_click on_click: Option(Msg),
+  on_click msg: Msg,
+  enabled enabled: Bool,
 ) -> Element(Msg) {
-  let attributes: List(Attribute(Msg)) = case on_click {
-    Some(msg) -> [event.on_click(msg)]
-    None -> [attribute.disabled(True)]
-  }
-
-  html.button(attributes, [html.text(label)])
+  html.button([attribute.disabled(!enabled), event.on_click(msg)], [
+    html.text(label),
+  ])
 }
 
 fn view_person_options(model: Model) -> List(Element(Msg)) {
