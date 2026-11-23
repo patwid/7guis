@@ -38,32 +38,25 @@ type Content {
 }
 
 /// A non-blank cell. Only `parse_cell` builds one, so `content` is always the
-/// parse of `raw`.
+/// parse of `raw` and `refs` the cells it reads.
 type Cell {
-  Cell(raw: String, content: Content)
+  Cell(raw: String, content: Content, refs: Set(CellRef))
 }
 
 /// Invariants, maintained by `set`:
 /// - `values` has an entry for exactly the cells in `cells`, evaluated from
 ///   their current content;
-/// - `dependencies` maps a cell to the cells it reads, `dependents` is its
-///   inverse, and neither holds empty sets.
+/// - `dependents` is the inverse of the cells' `refs` and holds no empty sets.
 pub opaque type Sheet {
   Sheet(
     cells: Dict(CellRef, Cell),
     values: Dict(CellRef, Value),
-    dependencies: Dict(CellRef, Set(CellRef)),
     dependents: Dict(CellRef, Set(CellRef)),
   )
 }
 
 pub fn new() -> Sheet {
-  Sheet(
-    cells: dict.new(),
-    values: dict.new(),
-    dependencies: dict.new(),
-    dependents: dict.new(),
-  )
+  Sheet(cells: dict.new(), values: dict.new(), dependents: dict.new())
 }
 
 /// The text the user entered into the cell; empty for a blank cell.
@@ -81,16 +74,21 @@ pub fn value(sheet: Sheet, ref: CellRef) -> Value {
 /// Replaces the content of a cell and re-evaluates everything affected. A
 /// blank `raw` clears the cell.
 pub fn set(sheet: Sheet, ref: CellRef, raw: String) -> Sheet {
-  let sheet = case parse_cell(raw) {
-    Some(cell) -> insert(sheet, ref, cell)
-    None -> remove(sheet, ref)
+  let old_refs = dependencies(sheet.cells, ref)
+  let #(cells, new_refs) = case parse_cell(raw) {
+    Some(cell) -> #(dict.insert(sheet.cells, ref, cell), cell.refs)
+    None -> #(dict.delete(sheet.cells, ref), set.new())
   }
+  let dependents = update_dependents(sheet.dependents, ref, old_refs, new_refs)
 
-  recalculate(sheet, ref)
+  recalculate(Sheet(..sheet, cells:, dependents:), ref)
 }
 
 fn parse_cell(raw: String) -> Option(Cell) {
-  parse_content(raw) |> option.map(fn(content) { Cell(raw:, content:) })
+  parse_content(raw)
+  |> option.map(fn(content) {
+    Cell(raw:, content:, refs: content_refs(content))
+  })
 }
 
 fn parse_content(raw: String) -> Option(Content) {
@@ -109,20 +107,6 @@ fn parse_content(raw: String) -> Option(Content) {
   }
 }
 
-fn insert(sheet: Sheet, ref: CellRef, cell: Cell) -> Sheet {
-  Sheet(..sheet, cells: dict.insert(sheet.cells, ref, cell))
-  |> set_dependencies(ref, content_refs(cell.content))
-}
-
-fn remove(sheet: Sheet, ref: CellRef) -> Sheet {
-  Sheet(
-    ..sheet,
-    cells: dict.delete(sheet.cells, ref),
-    values: dict.delete(sheet.values, ref),
-  )
-  |> set_dependencies(ref, set.new())
-}
-
 fn lookup(values: Dict(CellRef, Value), ref: CellRef) -> Value {
   dict.get(values, ref) |> result.unwrap(VEmpty)
 }
@@ -136,29 +120,29 @@ fn content_refs(content: Content) -> Set(CellRef) {
 
 // --- Dependency graph ---
 
-/// Records that `ref` now reads exactly `new_deps`, keeping `dependents` in
-/// sync.
-fn set_dependencies(
-  sheet: Sheet,
-  ref: CellRef,
-  new_deps: Set(CellRef),
-) -> Sheet {
-  let old_deps = neighbours(sheet.dependencies, ref)
+/// The cells `ref` reads.
+fn dependencies(cells: Dict(CellRef, Cell), ref: CellRef) -> Set(CellRef) {
+  case dict.get(cells, ref) {
+    Ok(cell) -> cell.refs
+    Error(_) -> set.new()
+  }
+}
 
+/// Moves `ref` from the dependents of `old_refs` to those of `new_refs`.
+fn update_dependents(
+  dependents: Dict(CellRef, Set(CellRef)),
+  ref: CellRef,
+  old_refs: Set(CellRef),
+  new_refs: Set(CellRef),
+) -> Dict(CellRef, Set(CellRef)) {
   let dependents =
-    set.fold(old_deps, sheet.dependents, fn(dependents, dep) {
+    set.fold(old_refs, dependents, fn(dependents, dep) {
       remove_neighbour(dependents, dep, ref)
     })
-  let dependents =
-    set.fold(new_deps, dependents, fn(dependents, dep) {
-      add_neighbour(dependents, dep, ref)
-    })
-  let dependencies = case set.is_empty(new_deps) {
-    True -> dict.delete(sheet.dependencies, ref)
-    False -> dict.insert(sheet.dependencies, ref, new_deps)
-  }
 
-  Sheet(..sheet, dependencies:, dependents:)
+  set.fold(new_refs, dependents, fn(dependents, dep) {
+    add_neighbour(dependents, dep, ref)
+  })
 }
 
 fn neighbours(
@@ -196,7 +180,7 @@ fn recalculate(sheet: Sheet, changed: CellRef) -> Sheet {
     collect_dependents(changed, sheet.dependents, set.from_list([changed]))
   let circular =
     set.filter(affected, fn(ref) {
-      has_cycle(ref, neighbours(sheet.dependencies, ref), sheet.dependencies)
+      has_cycle(ref, dependencies(sheet.cells, ref), sheet.cells)
     })
 
   let values =
@@ -206,7 +190,7 @@ fn recalculate(sheet: Sheet, changed: CellRef) -> Sheet {
 
   let values =
     set.difference(affected, circular)
-    |> topological_order(sheet.dependencies)
+    |> topological_order(sheet.cells)
     |> list.fold(values, fn(values, ref) {
       case dict.get(sheet.cells, ref) {
         Ok(cell) -> dict.insert(values, ref, evaluate(cell.content, values))
@@ -234,15 +218,15 @@ fn collect_dependents(
 fn has_cycle(
   target: CellRef,
   refs: Set(CellRef),
-  dependencies: Dict(CellRef, Set(CellRef)),
+  cells: Dict(CellRef, Cell),
 ) -> Bool {
-  has_cycle_loop(target, set.to_list(refs), dependencies, set.new())
+  has_cycle_loop(target, set.to_list(refs), cells, set.new())
 }
 
 fn has_cycle_loop(
   target: CellRef,
   stack: List(CellRef),
-  dependencies: Dict(CellRef, Set(CellRef)),
+  cells: Dict(CellRef, Cell),
   visited: Set(CellRef),
 ) -> Bool {
   case stack {
@@ -250,27 +234,27 @@ fn has_cycle_loop(
     [ref, ..] if ref == target -> True
     [ref, ..rest] ->
       case set.contains(visited, ref) {
-        True -> has_cycle_loop(target, rest, dependencies, visited)
+        True -> has_cycle_loop(target, rest, cells, visited)
         False ->
           has_cycle_loop(
             target,
-            list.append(set.to_list(neighbours(dependencies, ref)), rest),
-            dependencies,
+            list.append(set.to_list(dependencies(cells, ref)), rest),
+            cells,
             set.insert(visited, ref),
           )
       }
   }
 }
 
-/// Orders `cells` so that each cell comes after the cells it depends on.
-/// Dependencies outside `cells` are ignored; `cells` must be acyclic.
+/// Orders `refs` so that each cell comes after the cells it depends on.
+/// Dependencies outside `refs` are ignored; `refs` must be acyclic.
 fn topological_order(
-  cells: Set(CellRef),
-  dependencies: Dict(CellRef, Set(CellRef)),
+  refs: Set(CellRef),
+  cells: Dict(CellRef, Cell),
 ) -> List(CellRef) {
   let #(order, _) =
-    set.fold(cells, #([], set.new()), fn(acc, ref) {
-      visit(ref, cells, dependencies, acc)
+    set.fold(refs, #([], set.new()), fn(acc, ref) {
+      visit(ref, refs, cells, acc)
     })
 
   list.reverse(order)
@@ -278,19 +262,19 @@ fn topological_order(
 
 fn visit(
   ref: CellRef,
-  cells: Set(CellRef),
-  dependencies: Dict(CellRef, Set(CellRef)),
+  refs: Set(CellRef),
+  cells: Dict(CellRef, Cell),
   acc: #(List(CellRef), Set(CellRef)),
 ) -> #(List(CellRef), Set(CellRef)) {
   let #(order, seen) = acc
-  case set.contains(seen, ref) || !set.contains(cells, ref) {
+  case set.contains(seen, ref) || !set.contains(refs, ref) {
     True -> acc
     False -> {
       let #(order, seen) =
         set.fold(
-          neighbours(dependencies, ref),
+          dependencies(cells, ref),
           #(order, set.insert(seen, ref)),
-          fn(acc, dep) { visit(dep, cells, dependencies, acc) },
+          fn(acc, dep) { visit(dep, refs, cells, acc) },
         )
       #([ref, ..order], seen)
     }
