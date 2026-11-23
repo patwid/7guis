@@ -16,10 +16,16 @@ pub fn main() {
   Nil
 }
 
-/// `elapsed` only advances while it is below `duration`; it may exceed
-/// `duration` when the user shortens the duration after the fact.
+/// `ticked` is the time counted so far. It only advances while below
+/// `duration`, but stays as it is when the user shortens the duration, so it
+/// may exceed `duration`. What is shown and compared against is `elapsed`.
 type Model {
-  Model(elapsed: Duration, duration: Duration)
+  Model(ticked: Duration, duration: Duration)
+}
+
+/// The elapsed time: `ticked`, capped at the current duration.
+fn elapsed(model: Model) -> Duration {
+  min(model.ticked, model.duration)
 }
 
 const tick_ms = 100
@@ -28,7 +34,7 @@ const max_duration_ms = 30_000
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(
-    Model(elapsed: duration.milliseconds(0), duration: duration.seconds(15)),
+    Model(ticked: duration.milliseconds(0), duration: duration.seconds(15)),
     every(tick_ms, TimerTicked),
   )
 }
@@ -49,23 +55,33 @@ type Msg {
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
     TimerTicked ->
-      case duration.compare(model.elapsed, model.duration) {
+      case duration.compare(elapsed(model), model.duration) {
         order.Lt -> {
-          let elapsed =
-            duration.add(model.elapsed, duration.milliseconds(tick_ms))
+          let ticked =
+            duration.add(model.ticked, duration.milliseconds(tick_ms))
             |> min(model.duration)
-          #(Model(..model, elapsed:), effect.none())
+          #(Model(..model, ticked:), effect.none())
         }
         order.Eq | order.Gt -> #(model, effect.none())
       }
 
-    UserUpdatedDuration(duration) -> #(Model(..model, duration:), effect.none())
+    UserUpdatedDuration(duration) -> #(
+      Model(..model, duration: clamp_duration(duration)),
+      effect.none(),
+    )
 
     UserResetTimer -> #(
-      Model(..model, elapsed: duration.milliseconds(0)),
+      Model(..model, ticked: duration.milliseconds(0)),
       effect.none(),
     )
   }
+}
+
+/// Keeps a duration within what the slider offers.
+fn clamp_duration(time: Duration) -> Duration {
+  duration.to_milliseconds(time)
+  |> int.clamp(min: 0, max: max_duration_ms)
+  |> duration.milliseconds
 }
 
 fn min(a: Duration, b: Duration) -> Duration {
@@ -76,7 +92,7 @@ fn min(a: Duration, b: Duration) -> Duration {
 }
 
 fn view(model: Model) -> Element(Msg) {
-  let shown = min(model.elapsed, model.duration)
+  let shown = elapsed(model)
 
   html.div([attribute.class("column")], [
     html.label([], [
