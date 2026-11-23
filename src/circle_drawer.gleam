@@ -22,8 +22,15 @@ pub fn main() {
 
 // --- Types ---
 
+/// `pointer` is where the mouse is over the canvas, if it is. It is kept
+/// while the menu or dialog is open, which make the canvas inert, so that the
+/// hovered circle is highlighted again as soon as they close.
 type Model {
-  Model(history: History(Circles), interaction: Interaction)
+  Model(
+    history: History(Circles),
+    interaction: Interaction,
+    pointer: Option(Position),
+  )
 }
 
 /// The circles in creation order, which is also the order they are drawn in
@@ -55,7 +62,7 @@ type Position {
 /// `target` is a snapshot of the circle the menu or dialog is for. It cannot
 /// go stale: the history only changes while idle, or as the dialog closes.
 type Interaction {
-  Idle(pointer: Option(Position))
+  Idle
   MenuOpen(target: Entry)
   /// `diameter` is a preview: the circle in the history keeps its diameter
   /// until the dialog is closed.
@@ -74,7 +81,7 @@ const dialog_id = "dialog"
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(
-    Model(history: history_new([]), interaction: Idle(pointer: None)),
+    Model(history: history_new([]), interaction: Idle, pointer: None),
     init_dialog(),
   )
 }
@@ -109,7 +116,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 /// ignores: a new message has to be handled or explicitly ignored in each.
 fn update_model(model: Model, msg: Msg) -> Model {
   case model.interaction {
-    Idle(_) -> update_idle(model, msg)
+    Idle -> update_idle(model, msg)
     MenuOpen(target) -> update_menu_open(model, target, msg)
     Adjusting(target, diameter) ->
       update_adjusting(model, target, diameter, msg)
@@ -126,11 +133,11 @@ fn update_idle(model: Model, msg: Msg) -> Model {
           let circle = Circle(center: position, diameter: default_diameter)
 
           Model(
+            ..model,
             history: history_push(
               model.history,
               list.append(circles, [Entry(id: next_id(circles), circle:)]),
             ),
-            interaction: Idle(pointer: Some(position)),
           )
         }
         Some(_) -> model
@@ -142,10 +149,9 @@ fn update_idle(model: Model, msg: Msg) -> Model {
         None -> model
       }
 
-    UserMovedMouse(position) ->
-      Model(..model, interaction: Idle(pointer: Some(position)))
+    UserMovedMouse(position) -> Model(..model, pointer: Some(position))
 
-    UserLeftCanvas -> Model(..model, interaction: Idle(pointer: None))
+    UserLeftCanvas -> Model(..model, pointer: None)
 
     UserClickedUndo -> Model(..model, history: history_undo(model.history))
 
@@ -165,7 +171,7 @@ fn update_menu_open(model: Model, target: Entry, msg: Msg) -> Model {
     UserClickedAdjustDiameter ->
       Model(..model, interaction: Adjusting(target, target.circle.diameter))
 
-    UserClosedMenu -> Model(..model, interaction: Idle(pointer: None))
+    UserClosedMenu -> Model(..model, interaction: Idle)
 
     // The menu is modal: the canvas and the undo/redo buttons are inert.
     UserClickedCanvas(_)
@@ -207,7 +213,7 @@ fn update_adjusting(
           )
       }
 
-      Model(history:, interaction: Idle(pointer: None))
+      Model(..model, history:, interaction: Idle)
     }
 
     // The menu fires its close event after the model has already closed it;
@@ -380,7 +386,7 @@ fn view_menu(model: Model) -> Element(Msg) {
 fn view_dialog(model: Model) -> Element(Msg) {
   let adjusting = case model.interaction {
     Adjusting(target, diameter) -> Some(Circle(..target.circle, diameter:))
-    Idle(_) | MenuOpen(_) -> None
+    Idle | MenuOpen(_) -> None
   }
 
   let content = case adjusting {
@@ -418,8 +424,8 @@ fn view_dialog(model: Model) -> Element(Msg) {
 
 fn view_circles(model: Model) -> List(Element(Msg)) {
   let highlighted = case model.interaction {
-    Idle(pointer:) ->
-      option.then(pointer, circle_at(model.history.present, _))
+    Idle ->
+      option.then(model.pointer, circle_at(model.history.present, _))
       |> option.map(fn(entry) { entry.id })
     MenuOpen(target) | Adjusting(target, _) -> Some(target.id)
   }
@@ -436,7 +442,7 @@ fn displayed_circles(model: Model) -> Circles {
   case model.interaction {
     Adjusting(target, diameter) ->
       set_diameter(model.history.present, target.id, diameter)
-    Idle(_) | MenuOpen(_) -> model.history.present
+    Idle | MenuOpen(_) -> model.history.present
   }
 }
 
