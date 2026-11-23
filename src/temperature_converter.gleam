@@ -21,6 +21,8 @@ type Model {
   Model(celsius: String, fahrenheit: String)
 }
 
+/// A temperature tagged with its unit. A plain number becomes one only through
+/// `celsius` or `fahrenheit`, so its unit is always named, never inferred.
 type Temperature(unit) {
   Temperature(Float)
 }
@@ -50,26 +52,34 @@ fn update(model: Model, msg: Msg) -> Model {
   case msg {
     UserUpdatedCelsius(text) ->
       case parse(text) {
-        Valid(celsius) ->
-          Model(celsius: text, fahrenheit: to_string(to_fahrenheit(celsius)))
+        Valid(degrees) ->
+          Model(
+            celsius: text,
+            fahrenheit: to_string(to_fahrenheit(celsius(degrees))),
+          )
         Empty | Invalid -> Model(..model, celsius: text)
       }
 
     UserUpdatedFahrenheit(text) ->
       case parse(text) {
-        Valid(fahrenheit) ->
-          Model(celsius: to_string(to_celsius(fahrenheit)), fahrenheit: text)
+        Valid(degrees) ->
+          Model(
+            celsius: to_string(to_celsius(fahrenheit(degrees))),
+            fahrenheit: text,
+          )
         Empty | Invalid -> Model(..model, fahrenheit: text)
       }
   }
 }
 
-fn parse(text: String) -> Input(Temperature(unit)) {
+/// Parses the text of a field into a number of degrees. It yields no
+/// `Temperature`: the caller has to name the unit.
+fn parse(text: String) -> Input(Float) {
   case string.trim(text) {
     "" -> Empty
     trimmed ->
       case parse_number(trimmed) {
-        Ok(value) -> Valid(Temperature(value))
+        Ok(value) -> Valid(value)
         Error(_) -> Invalid
       }
   }
@@ -79,6 +89,14 @@ fn parse(text: String) -> Input(Temperature(unit)) {
 fn parse_number(text: String) -> Result(Float, Nil) {
   float.parse(text)
   |> result.lazy_or(fn() { int.parse(text) |> result.map(int.to_float) })
+}
+
+fn celsius(degrees: Float) -> Temperature(Celsius) {
+  Temperature(degrees)
+}
+
+fn fahrenheit(degrees: Float) -> Temperature(Fahrenheit) {
+  Temperature(degrees)
 }
 
 fn to_celsius(fahrenheit: Temperature(Fahrenheit)) -> Temperature(Celsius) {
