@@ -48,7 +48,7 @@ type Position {
 /// that is meaningful in that state, so e.g. an open dialog always refers to
 /// a circle.
 type Interaction {
-  Idle(hovered: Option(CircleId))
+  Idle(pointer: Option(Position))
   MenuOpen(circle: CircleId)
   /// `diameter` is a preview: the circle in the history keeps its diameter
   /// until the dialog is closed.
@@ -67,7 +67,7 @@ const dialog_id = "dialog"
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(
-    Model(history: history_new([]), interaction: Idle(hovered: None)),
+    Model(history: history_new([]), interaction: Idle(pointer: None)),
     init_dialog(),
   )
 }
@@ -83,7 +83,7 @@ fn do_init_dialog() -> Nil
 
 type Msg {
   UserClickedCanvas(Position)
-  UserRightClickedCanvas
+  UserRightClickedCanvas(Position)
   UserMovedMouse(Position)
   UserLeftCanvas
   UserClickedAdjustDiameter
@@ -102,26 +102,32 @@ fn update_model(model: Model, msg: Msg) -> Model {
   let circles = model.history.present
 
   case msg, model.interaction {
-    UserClickedCanvas(position), Idle(hovered: None) -> {
-      let id = next_id(circles)
-      let circle = Circle(center: position, diameter: default_diameter)
+    UserClickedCanvas(position), Idle(_) ->
+      case circle_at(circles, position) {
+        None -> {
+          let circle = Circle(center: position, diameter: default_diameter)
 
-      Model(
-        history: history_push(
-          model.history,
-          list.append(circles, [#(id, circle)]),
-        ),
-        interaction: Idle(hovered: Some(id)),
-      )
-    }
+          Model(
+            history: history_push(
+              model.history,
+              list.append(circles, [#(next_id(circles), circle)]),
+            ),
+            interaction: Idle(pointer: Some(position)),
+          )
+        }
+        Some(_) -> model
+      }
 
-    UserRightClickedCanvas, Idle(hovered: Some(id)) ->
-      Model(..model, interaction: MenuOpen(id))
+    UserRightClickedCanvas(position), Idle(_) ->
+      case circle_at(circles, position) {
+        Some(id) -> Model(..model, interaction: MenuOpen(id))
+        None -> model
+      }
 
     UserMovedMouse(position), Idle(_) ->
-      Model(..model, interaction: Idle(hovered: circle_at(circles, position)))
+      Model(..model, interaction: Idle(pointer: Some(position)))
 
-    UserLeftCanvas, Idle(_) -> Model(..model, interaction: Idle(hovered: None))
+    UserLeftCanvas, Idle(_) -> Model(..model, interaction: Idle(pointer: None))
 
     UserClickedAdjustDiameter, MenuOpen(id) ->
       case list.key_find(circles, id) {
@@ -133,7 +139,7 @@ fn update_model(model: Model, msg: Msg) -> Model {
       }
 
     UserClosedMenu, MenuOpen(_) ->
-      Model(..model, interaction: Idle(hovered: None))
+      Model(..model, interaction: Idle(pointer: None))
 
     // Only the preview changes while dragging the slider; the history is
     // touched once, when the dialog is closed.
@@ -153,20 +159,14 @@ fn update_model(model: Model, msg: Msg) -> Model {
         _ -> model.history
       }
 
-      Model(history:, interaction: Idle(hovered: None))
+      Model(history:, interaction: Idle(pointer: None))
     }
 
     UserClickedUndo, Idle(_) ->
-      Model(
-        history: history_undo(model.history),
-        interaction: Idle(hovered: None),
-      )
+      Model(..model, history: history_undo(model.history))
 
     UserClickedRedo, Idle(_) ->
-      Model(
-        history: history_redo(model.history),
-        interaction: Idle(hovered: None),
-      )
+      Model(..model, history: history_redo(model.history))
 
     // Any other combination is not meaningful in the current interaction
     // state (e.g. hovering while a modal dialog is open) and is ignored.
@@ -287,7 +287,10 @@ fn view(model: Model) -> Element(Msg) {
         event.on("mousemove", position_decoder() |> decode.map(UserMovedMouse)),
         event.on_mouse_leave(UserLeftCanvas),
         event.on("click", position_decoder() |> decode.map(UserClickedCanvas)),
-        event.on("contextmenu", decode.success(UserRightClickedCanvas))
+        event.on(
+          "contextmenu",
+          position_decoder() |> decode.map(UserRightClickedCanvas),
+        )
           |> event.prevent_default,
       ],
       view_circles(model),
@@ -366,7 +369,8 @@ fn view_dialog(model: Model) -> Element(Msg) {
 
 fn view_circles(model: Model) -> List(Element(Msg)) {
   let highlighted = case model.interaction {
-    Idle(hovered:) -> hovered
+    Idle(pointer:) ->
+      option.then(pointer, circle_at(model.history.present, _))
     MenuOpen(id) | Adjusting(id, _) -> Some(id)
   }
 
