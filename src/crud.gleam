@@ -2,7 +2,6 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
 import lustre
 import lustre/attribute
@@ -22,7 +21,10 @@ type Model {
     people: People,
     /// Never reused, so an id always denotes the same person.
     next_id: PersonId,
-    selected: Option(PersonId),
+    /// A snapshot of the person the Update and Delete buttons act on. It
+    /// cannot go stale: `people` only changes through Create, Update and
+    /// Delete, which all clear the selection.
+    selected: Option(Entry),
     draft: Person,
     query: String,
   )
@@ -100,8 +102,8 @@ fn update(model: Model, msg: Msg) -> Model {
       })
 
     UserSelectedPerson(id) ->
-      case find_person(model.people, id) {
-        Ok(person) -> Model(..model, selected: Some(id), draft: person)
+      case find_entry(model.people, id) {
+        Ok(entry) -> Model(..model, selected: Some(entry), draft: entry.person)
         Error(_) -> model
       }
 
@@ -112,11 +114,7 @@ fn update(model: Model, msg: Msg) -> Model {
 
     UserUpdatedQuery(query) -> {
       let selection_hidden = case model.selected {
-        Some(id) ->
-          case find_person(model.people, id) {
-            Ok(person) -> !matches(person, query)
-            Error(_) -> True
-          }
+        Some(entry) -> !matches(entry.person, query)
         None -> False
       }
 
@@ -139,10 +137,10 @@ fn change_selected(
   change: fn(People, PersonId) -> People,
 ) -> Model {
   case model.selected {
-    Some(id) ->
+    Some(entry) ->
       Model(
         ..model,
-        people: change(model.people, id),
+        people: change(model.people, entry.id),
         selected: None,
         draft: empty_person,
       )
@@ -150,9 +148,8 @@ fn change_selected(
   }
 }
 
-fn find_person(people: People, id: PersonId) -> Result(Person, Nil) {
+fn find_entry(people: People, id: PersonId) -> Result(Entry, Nil) {
   list.find(people, fn(entry) { entry.id == id })
-  |> result.map(fn(entry) { entry.person })
 }
 
 fn matches(person: Person, query: String) -> Bool {
@@ -249,6 +246,8 @@ fn view_button(
 }
 
 fn view_person_options(model: Model) -> List(Element(Msg)) {
+  let selected_id = option.map(model.selected, fn(entry) { entry.id })
+
   visible_people(model)
   |> list.map(fn(entry) {
     let Entry(id:, person:) = entry
@@ -257,7 +256,7 @@ fn view_person_options(model: Model) -> List(Element(Msg)) {
     html.option(
       [
         attribute.value(int.to_string(value)),
-        attribute.selected(model.selected == Some(id)),
+        attribute.selected(selected_id == Some(id)),
       ],
       person.surname <> ", " <> person.name,
     )
