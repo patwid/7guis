@@ -21,13 +21,13 @@ type Model {
   Model(celsius: String, fahrenheit: String)
 }
 
-type Celsius {
-  Celsius(Float)
+type Temperature(unit) {
+  Temperature(Float)
 }
 
-type Fahrenheit {
-  Fahrenheit(Float)
-}
+type Celsius
+
+type Fahrenheit
 
 type Input(a) {
   Empty
@@ -49,33 +49,27 @@ fn update(model: Model, msg: Msg) -> Model {
   // string into TC the value in TF is not updated and vice versa.
   case msg {
     UserUpdatedCelsius(text) ->
-      case parse(text, Celsius) {
+      case parse(text) {
         Valid(celsius) ->
-          Model(
-            celsius: text,
-            fahrenheit: fahrenheit_to_string(to_fahrenheit(celsius)),
-          )
+          Model(celsius: text, fahrenheit: to_string(to_fahrenheit(celsius)))
         Empty | Invalid -> Model(..model, celsius: text)
       }
 
     UserUpdatedFahrenheit(text) ->
-      case parse(text, Fahrenheit) {
+      case parse(text) {
         Valid(fahrenheit) ->
-          Model(
-            celsius: celsius_to_string(to_celsius(fahrenheit)),
-            fahrenheit: text,
-          )
+          Model(celsius: to_string(to_celsius(fahrenheit)), fahrenheit: text)
         Empty | Invalid -> Model(..model, fahrenheit: text)
       }
   }
 }
 
-fn parse(text: String, unit: fn(Float) -> a) -> Input(a) {
+fn parse(text: String) -> Input(Temperature(unit)) {
   case string.trim(text) {
     "" -> Empty
     trimmed ->
       case parse_number(trimmed) {
-        Ok(value) -> Valid(unit(value))
+        Ok(value) -> Valid(Temperature(value))
         Error(_) -> Invalid
       }
   }
@@ -87,24 +81,19 @@ fn parse_number(text: String) -> Result(Float, Nil) {
   |> result.lazy_or(fn() { int.parse(text) |> result.map(int.to_float) })
 }
 
-fn to_celsius(fahrenheit: Fahrenheit) -> Celsius {
-  let Fahrenheit(f) = fahrenheit
-  Celsius({ f -. 32.0 } *. { 5.0 /. 9.0 })
+fn to_celsius(fahrenheit: Temperature(Fahrenheit)) -> Temperature(Celsius) {
+  let Temperature(f) = fahrenheit
+  Temperature({ f -. 32.0 } *. { 5.0 /. 9.0 })
 }
 
-fn to_fahrenheit(celsius: Celsius) -> Fahrenheit {
-  let Celsius(c) = celsius
-  Fahrenheit(c *. { 9.0 /. 5.0 } +. 32.0)
+fn to_fahrenheit(celsius: Temperature(Celsius)) -> Temperature(Fahrenheit) {
+  let Temperature(c) = celsius
+  Temperature(c *. { 9.0 /. 5.0 } +. 32.0)
 }
 
-fn celsius_to_string(celsius: Celsius) -> String {
-  let Celsius(c) = celsius
-  format_number(c)
-}
-
-fn fahrenheit_to_string(fahrenheit: Fahrenheit) -> String {
-  let Fahrenheit(f) = fahrenheit
-  format_number(f)
+fn to_string(temperature: Temperature(unit)) -> String {
+  let Temperature(degrees) = temperature
+  format_number(degrees)
 }
 
 /// Rounds to two decimals and drops a zero fraction, so conversions read
@@ -123,18 +112,25 @@ fn view(model: Model) -> Element(Msg) {
   html.div([attribute.class("row")], [
     view_temperature_input(
       value: model.celsius,
-      invalid: parse(model.celsius, Celsius) == Invalid,
+      invalid: is_invalid(model.celsius),
       label: "Celsius",
       on_input: UserUpdatedCelsius,
     ),
     html.text(" = "),
     view_temperature_input(
       value: model.fahrenheit,
-      invalid: parse(model.fahrenheit, Fahrenheit) == Invalid,
+      invalid: is_invalid(model.fahrenheit),
       label: "Fahrenheit",
       on_input: UserUpdatedFahrenheit,
     ),
   ])
+}
+
+fn is_invalid(text: String) -> Bool {
+  case parse(text) {
+    Invalid -> True
+    Empty | Valid(_) -> False
+  }
 }
 
 fn view_temperature_input(
