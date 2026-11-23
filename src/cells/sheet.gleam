@@ -15,11 +15,13 @@ import gleam/result
 import gleam/set.{type Set}
 import gleam/string
 
+/// What a cell evaluates to.
 pub type Value {
-  VEmpty
-  VNumber(Float)
-  VText(String)
-  VError(CellError)
+  Empty
+  Number(Float)
+  Text(String)
+  /// The cell could not be evaluated; shown as an error code.
+  Failed(CellError)
 }
 
 pub type CellError {
@@ -31,8 +33,10 @@ pub type CellError {
 
 /// What the user entered into a non-blank cell, after parsing.
 type Content {
-  Number(Float)
-  Text(String)
+  /// A number, e.g. `42`.
+  Constant(Float)
+  /// Any other text, e.g. `hello`.
+  Label(String)
   Formula(Expr)
   Malformed
 }
@@ -101,20 +105,20 @@ fn parse_content(raw: String) -> Option(Content) {
       }
     text ->
       case scan.parse_number(text) {
-        Ok(n) -> Some(Number(n))
-        Error(_) -> Some(Text(text))
+        Ok(n) -> Some(Constant(n))
+        Error(_) -> Some(Label(text))
       }
   }
 }
 
 fn lookup(values: Dict(CellRef, Value), ref: CellRef) -> Value {
-  dict.get(values, ref) |> result.unwrap(VEmpty)
+  dict.get(values, ref) |> result.unwrap(Empty)
 }
 
 fn content_refs(content: Content) -> Set(CellRef) {
   case content {
     Formula(expr) -> formula.refs(expr)
-    Number(_) | Text(_) | Malformed -> set.new()
+    Constant(_) | Label(_) | Malformed -> set.new()
   }
 }
 
@@ -185,7 +189,7 @@ fn recalculate(sheet: Sheet, changed: CellRef) -> Sheet {
 
   let values =
     set.fold(circular, sheet.values, fn(values, ref) {
-      dict.insert(values, ref, VError(CircularRef))
+      dict.insert(values, ref, Failed(CircularRef))
     })
 
   let values =
@@ -285,16 +289,16 @@ fn visit(
 
 fn evaluate(content: Content, values: Dict(CellRef, Value)) -> Value {
   case content {
-    Number(n) -> VNumber(n)
-    Text(s) -> VText(s)
+    Constant(n) -> Number(n)
+    Label(s) -> Text(s)
     Formula(expr) -> evaluate_expr(expr, values)
-    Malformed -> VError(ParseError)
+    Malformed -> Failed(ParseError)
   }
 }
 
 fn evaluate_expr(expr: Expr, values: Dict(CellRef, Value)) -> Value {
   case expr {
-    Literal(n) -> VNumber(n)
+    Literal(n) -> Number(n)
     Ref(ref) -> lookup(values, ref)
     Binary(op, left, right) ->
       apply_binary(
@@ -344,16 +348,16 @@ fn apply_aggregate(op: AggOp, values: List(Value)) -> Value {
 
 fn coerce_number(value: Value) -> Result(Float, CellError) {
   case value {
-    VEmpty -> Ok(0.0)
-    VNumber(n) -> Ok(n)
-    VText(_) -> Error(TypeError)
-    VError(e) -> Error(e)
+    Empty -> Ok(0.0)
+    Number(n) -> Ok(n)
+    Text(_) -> Error(TypeError)
+    Failed(e) -> Error(e)
   }
 }
 
 fn to_value(result: Result(Float, CellError)) -> Value {
   case result {
-    Ok(n) -> VNumber(n)
-    Error(e) -> VError(e)
+    Ok(n) -> Number(n)
+    Error(e) -> Failed(e)
   }
 }

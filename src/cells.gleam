@@ -1,7 +1,7 @@
 import cells/cell_ref.{type CellRef}
 import cells/sheet.{
-  type Sheet, type Value, CircularRef, DivByZero, ParseError, TypeError, VEmpty,
-  VError, VNumber, VText,
+  type Sheet, type Value, CircularRef, DivByZero, Empty, Failed, Number,
+  ParseError, Text, TypeError,
 }
 import gleam/dynamic/decode
 import gleam/float
@@ -285,13 +285,13 @@ fn view_cell_display(value: Value, ref: CellRef) -> Element(Msg) {
 
 fn format_value(value: Value) -> #(String, List(#(String, String))) {
   case value {
-    VEmpty -> #("", [])
-    VNumber(n) -> #(format_number(n), [#("text-align", "right")])
-    VText(s) -> #(s, [])
-    VError(CircularRef) -> #("#CIRC", [#("color", "red")])
-    VError(DivByZero) -> #("#DIV/0", [#("color", "red")])
-    VError(TypeError) -> #("#TYPE", [#("color", "red")])
-    VError(ParseError) -> #("#ERR", [#("color", "red")])
+    Empty -> #("", [])
+    Number(n) -> #(format_number(n), [#("text-align", "right")])
+    Text(s) -> #(s, [])
+    Failed(CircularRef) -> #("#CIRC", [#("color", "red")])
+    Failed(DivByZero) -> #("#DIV/0", [#("color", "red")])
+    Failed(TypeError) -> #("#TYPE", [#("color", "red")])
+    Failed(ParseError) -> #("#ERR", [#("color", "red")])
   }
 }
 
