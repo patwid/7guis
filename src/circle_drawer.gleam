@@ -5,7 +5,6 @@ import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
-import gleam/result
 import lustre
 import lustre/attribute.{type Attribute}
 import lustre/effect.{type Effect}
@@ -52,12 +51,15 @@ type Position {
 /// What the user is currently doing. Each variant carries exactly the data
 /// that is meaningful in that state, so e.g. an open dialog always refers to
 /// a circle.
+///
+/// `target` is a snapshot of the circle the menu or dialog is for. It cannot
+/// go stale: the history only changes while idle, or as the dialog closes.
 type Interaction {
   Idle(pointer: Option(Position))
-  MenuOpen(circle: CircleId)
+  MenuOpen(target: Entry)
   /// `diameter` is a preview: the circle in the history keeps its diameter
   /// until the dialog is closed.
-  Adjusting(circle: CircleId, diameter: Int)
+  Adjusting(target: Entry, diameter: Int)
 }
 
 const default_diameter = 60
@@ -108,8 +110,9 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 fn update_model(model: Model, msg: Msg) -> Model {
   case model.interaction {
     Idle(_) -> update_idle(model, msg)
-    MenuOpen(id) -> update_menu_open(model, id, msg)
-    Adjusting(id, diameter) -> update_adjusting(model, id, diameter, msg)
+    MenuOpen(target) -> update_menu_open(model, target, msg)
+    Adjusting(target, diameter) ->
+      update_adjusting(model, target, diameter, msg)
   }
 }
 
@@ -135,7 +138,7 @@ fn update_idle(model: Model, msg: Msg) -> Model {
 
     UserRightClickedCanvas(position) ->
       case circle_at(circles, position) {
-        Some(id) -> Model(..model, interaction: MenuOpen(id))
+        Some(target) -> Model(..model, interaction: MenuOpen(target))
         None -> model
       }
 
@@ -157,16 +160,10 @@ fn update_idle(model: Model, msg: Msg) -> Model {
   }
 }
 
-fn update_menu_open(model: Model, id: CircleId, msg: Msg) -> Model {
+fn update_menu_open(model: Model, target: Entry, msg: Msg) -> Model {
   case msg {
     UserClickedAdjustDiameter ->
-      case find_circle(model.history.present, id) {
-        Ok(circle) ->
-          Model(..model, interaction: Adjusting(id, circle.diameter))
-        // The menu only opens for an existing circle and the history cannot
-        // change while it is open.
-        Error(_) -> model
-      }
+      Model(..model, interaction: Adjusting(target, target.circle.diameter))
 
     UserClosedMenu -> Model(..model, interaction: Idle(pointer: None))
 
@@ -184,7 +181,7 @@ fn update_menu_open(model: Model, id: CircleId, msg: Msg) -> Model {
 
 fn update_adjusting(
   model: Model,
-  id: CircleId,
+  target: Entry,
   diameter: Int,
   msg: Msg,
 ) -> Model {
@@ -195,17 +192,19 @@ fn update_adjusting(
       Model(
         ..model,
         interaction: Adjusting(
-          id,
+          target,
           int.clamp(diameter, min: min_diameter, max: max_diameter),
         ),
       )
 
     UserClosedDialog -> {
-      let circles = model.history.present
-      let history = case find_circle(circles, id) {
-        Ok(circle) if circle.diameter != diameter ->
-          history_push(model.history, set_diameter(circles, id, diameter))
-        _ -> model.history
+      let history = case target.circle.diameter == diameter {
+        True -> model.history
+        False ->
+          history_push(
+            model.history,
+            set_diameter(model.history.present, target.id, diameter),
+          )
       }
 
       Model(history:, interaction: Idle(pointer: None))
@@ -235,11 +234,6 @@ fn next_id(circles: Circles) -> CircleId {
   }
 }
 
-fn find_circle(circles: Circles, id: CircleId) -> Result(Circle, Nil) {
-  list.find(circles, fn(entry) { entry.id == id })
-  |> result.map(fn(entry) { entry.circle })
-}
-
 fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
   list.map(circles, fn(entry) {
     case entry.id == id {
@@ -251,7 +245,7 @@ fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
 
 /// The circle nearest to `position` among those containing it; of equally
 /// near ones, the topmost.
-fn circle_at(circles: Circles, position: Position) -> Option(CircleId) {
+fn circle_at(circles: Circles, position: Position) -> Option(Entry) {
   circles
   |> list.filter(fn(entry) { contains(entry.circle, position) })
   |> list.fold(None, fn(best: Option(Entry), entry) {
@@ -269,7 +263,6 @@ fn circle_at(circles: Circles, position: Position) -> Option(CircleId) {
       None -> Some(entry)
     }
   })
-  |> option.map(fn(entry) { entry.id })
 }
 
 fn contains(circle: Circle, position: Position) -> Bool {
@@ -386,11 +379,8 @@ fn view_menu(model: Model) -> Element(Msg) {
 
 fn view_dialog(model: Model) -> Element(Msg) {
   let adjusting = case model.interaction {
-    Adjusting(id, diameter) ->
-      find_circle(model.history.present, id)
-      |> result.map(fn(circle) { Circle(..circle, diameter:) })
-      |> option.from_result
-    _ -> None
+    Adjusting(target, diameter) -> Some(Circle(..target.circle, diameter:))
+    Idle(_) | MenuOpen(_) -> None
   }
 
   let content = case adjusting {
@@ -428,8 +418,10 @@ fn view_dialog(model: Model) -> Element(Msg) {
 
 fn view_circles(model: Model) -> List(Element(Msg)) {
   let highlighted = case model.interaction {
-    Idle(pointer:) -> option.then(pointer, circle_at(model.history.present, _))
-    MenuOpen(id) | Adjusting(id, _) -> Some(id)
+    Idle(pointer:) ->
+      option.then(pointer, circle_at(model.history.present, _))
+      |> option.map(fn(entry) { entry.id })
+    MenuOpen(target) | Adjusting(target, _) -> Some(target.id)
   }
 
   displayed_circles(model)
@@ -442,7 +434,8 @@ fn view_circles(model: Model) -> List(Element(Msg)) {
 /// The circles as shown: the one being adjusted has its preview diameter.
 fn displayed_circles(model: Model) -> Circles {
   case model.interaction {
-    Adjusting(id, diameter) -> set_diameter(model.history.present, id, diameter)
+    Adjusting(target, diameter) ->
+      set_diameter(model.history.present, target.id, diameter)
     Idle(_) | MenuOpen(_) -> model.history.present
   }
 }
