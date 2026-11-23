@@ -30,6 +30,12 @@ type Direction {
   Backward
 }
 
+/// What happens to the editor's text when the editor closes.
+type Closing {
+  Commit
+  Discard
+}
+
 type Msg {
   UserDoubleClickedCell(CellRef)
   UserClickedCell
@@ -69,11 +75,11 @@ fn do_focus_cell_editor() -> Nil
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
   case msg {
     UserDoubleClickedCell(ref) -> #(
-      model |> close_editor(commit: True) |> open_editor(ref),
+      model |> close_editor(Commit) |> open_editor(ref),
       focus_editor(),
     )
 
-    UserClickedCell -> #(close_editor(model, commit: True), effect.none())
+    UserClickedCell -> #(close_editor(model, Commit), effect.none())
 
     UserUpdatedFormula(text) -> {
       let editor =
@@ -81,14 +87,14 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
       #(Model(..model, editor:), effect.none())
     }
 
-    UserFinishedEditing -> #(close_editor(model, commit: True), effect.none())
+    UserFinishedEditing -> #(close_editor(model, Commit), effect.none())
 
-    UserCancelledEditing -> #(close_editor(model, commit: False), effect.none())
+    UserCancelledEditing -> #(close_editor(model, Discard), effect.none())
 
     UserBlurredEditor(ref) ->
       case model.editor {
         Some(Editor(ref: editing, ..)) if editing == ref -> #(
-          close_editor(model, commit: True),
+          close_editor(model, Commit),
           effect.none(),
         )
         _ -> #(model, effect.none())
@@ -104,7 +110,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
           }
 
           #(
-            model |> close_editor(commit: True) |> open_editor(target),
+            model |> close_editor(Commit) |> open_editor(target),
             focus_editor(),
           )
         }
@@ -116,11 +122,11 @@ fn open_editor(model: Model, ref: CellRef) -> Model {
   Model(..model, editor: Some(Editor(ref:, text: sheet.raw(model.sheet, ref))))
 }
 
-fn close_editor(model: Model, commit commit: Bool) -> Model {
-  case model.editor, commit {
-    Some(Editor(ref:, text:)), True ->
+fn close_editor(model: Model, closing: Closing) -> Model {
+  case model.editor, closing {
+    Some(Editor(ref:, text:)), Commit ->
       Model(sheet: sheet.set(model.sheet, ref, text), editor: None)
-    _, _ -> Model(..model, editor: None)
+    None, _ | Some(_), Discard -> Model(..model, editor: None)
   }
 }
 
