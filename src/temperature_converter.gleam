@@ -1,5 +1,6 @@
 import gleam/float
 import gleam/int
+import gleam/result
 import gleam/string
 import lustre
 import lustre/attribute
@@ -21,11 +22,11 @@ type Model {
 }
 
 type Celsius {
-  Celsius(Int)
+  Celsius(Float)
 }
 
 type Fahrenheit {
-  Fahrenheit(Int)
+  Fahrenheit(Float)
 }
 
 type Input(a) {
@@ -69,35 +70,53 @@ fn update(model: Model, msg: Msg) -> Model {
   }
 }
 
-fn parse(text: String, unit: fn(Int) -> a) -> Input(a) {
+fn parse(text: String, unit: fn(Float) -> a) -> Input(a) {
   case string.trim(text) {
     "" -> Empty
     trimmed ->
-      case int.parse(trimmed) {
+      case parse_number(trimmed) {
         Ok(value) -> Valid(unit(value))
         Error(_) -> Invalid
       }
   }
 }
 
+/// Accepts whole numbers as well as decimals.
+fn parse_number(text: String) -> Result(Float, Nil) {
+  float.parse(text)
+  |> result.lazy_or(fn() { int.parse(text) |> result.map(int.to_float) })
+}
+
 fn to_celsius(fahrenheit: Fahrenheit) -> Celsius {
   let Fahrenheit(f) = fahrenheit
-  Celsius(float.round({ int.to_float(f) -. 32.0 } *. { 5.0 /. 9.0 }))
+  Celsius({ f -. 32.0 } *. { 5.0 /. 9.0 })
 }
 
 fn to_fahrenheit(celsius: Celsius) -> Fahrenheit {
   let Celsius(c) = celsius
-  Fahrenheit(float.round(int.to_float(c) *. { 9.0 /. 5.0 } +. 32.0))
+  Fahrenheit(c *. { 9.0 /. 5.0 } +. 32.0)
 }
 
 fn celsius_to_string(celsius: Celsius) -> String {
   let Celsius(c) = celsius
-  int.to_string(c)
+  format_number(c)
 }
 
 fn fahrenheit_to_string(fahrenheit: Fahrenheit) -> String {
   let Fahrenheit(f) = fahrenheit
-  int.to_string(f)
+  format_number(f)
+}
+
+/// Rounds to two decimals and drops a zero fraction, so conversions read
+/// `98.6` and `212` rather than `98.60000000000001` and `212.0`.
+fn format_number(n: Float) -> String {
+  let rounded = float.to_precision(n, 2)
+  let whole = float.truncate(rounded)
+
+  case int.to_float(whole) == rounded {
+    True -> int.to_string(whole)
+    False -> float.to_string(rounded)
+  }
 }
 
 fn view(model: Model) -> Element(Msg) {
