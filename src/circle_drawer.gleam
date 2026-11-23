@@ -1,10 +1,11 @@
-import gleam/dict.{type Dict}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/float
 import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
+import gleam/result
 import lustre
 import lustre/attribute.{type Attribute}
 import lustre/effect.{type Effect}
@@ -23,11 +24,13 @@ pub fn main() {
 // --- Types ---
 
 type Model {
-  Model(history: History(Circles), next_id: Int, interaction: Interaction)
+  Model(history: History(Circles), interaction: Interaction)
 }
 
+/// The circles in creation order, which is also the order they are drawn in
+/// (later circles on top). Ids increase along the list.
 type Circles =
-  Dict(CircleId, Circle)
+  List(#(CircleId, Circle))
 
 type CircleId {
   CircleId(Int)
@@ -47,10 +50,16 @@ type Position {
 type Interaction {
   Idle(hovered: Option(CircleId))
   MenuOpen(circle: CircleId)
-  Adjusting(circle: CircleId, original_diameter: Int)
+  /// `diameter` is a preview: the circle in the history keeps its diameter
+  /// until the dialog is closed.
+  Adjusting(circle: CircleId, diameter: Int)
 }
 
 const default_diameter = 60
+
+const min_diameter = 4
+
+const max_diameter = 200
 
 const menu_id = "menu"
 
@@ -58,11 +67,7 @@ const dialog_id = "dialog"
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(
-    Model(
-      history: history_new(dict.new()),
-      next_id: 0,
-      interaction: Idle(hovered: None),
-    ),
+    Model(history: history_new([]), interaction: Idle(hovered: None)),
     init_dialog(),
   )
 }
@@ -98,12 +103,14 @@ fn update_model(model: Model, msg: Msg) -> Model {
 
   case msg, model.interaction {
     UserClickedCanvas(position), Idle(hovered: None) -> {
-      let id = CircleId(model.next_id)
+      let id = next_id(circles)
       let circle = Circle(center: position, diameter: default_diameter)
 
       Model(
-        history: history_push(model.history, dict.insert(circles, id, circle)),
-        next_id: model.next_id + 1,
+        history: history_push(
+          model.history,
+          list.append(circles, [#(id, circle)]),
+        ),
         interaction: Idle(hovered: Some(id)),
       )
     }
@@ -117,48 +124,46 @@ fn update_model(model: Model, msg: Msg) -> Model {
     UserLeftCanvas, Idle(_) -> Model(..model, interaction: Idle(hovered: None))
 
     UserClickedAdjustDiameter, MenuOpen(id) ->
-      case dict.get(circles, id) {
+      case list.key_find(circles, id) {
         Ok(circle) ->
           Model(..model, interaction: Adjusting(id, circle.diameter))
-        Error(_) -> Model(..model, interaction: Idle(hovered: None))
+        // The menu only opens for an existing circle and the history cannot
+        // change while it is open.
+        Error(_) -> model
       }
 
     UserClosedMenu, MenuOpen(_) ->
       Model(..model, interaction: Idle(hovered: None))
 
-    // Live preview while dragging the slider: changes the present state
-    // without recording history; the change is committed on close.
+    // Only the preview changes while dragging the slider; the history is
+    // touched once, when the dialog is closed.
     UserAdjustedDiameter(diameter), Adjusting(id, _) ->
       Model(
         ..model,
-        history: history_replace(
-          model.history,
-          set_diameter(circles, id, diameter),
+        interaction: Adjusting(
+          id,
+          int.clamp(diameter, min: min_diameter, max: max_diameter),
         ),
       )
 
-    UserClosedDialog, Adjusting(id, original_diameter) -> {
-      let history = case dict.get(circles, id) {
-        Ok(circle) if circle.diameter != original_diameter ->
-          model.history
-          |> history_replace(set_diameter(circles, id, original_diameter))
-          |> history_push(circles)
+    UserClosedDialog, Adjusting(id, diameter) -> {
+      let history = case list.key_find(circles, id) {
+        Ok(circle) if circle.diameter != diameter ->
+          history_push(model.history, set_diameter(circles, id, diameter))
         _ -> model.history
       }
 
-      Model(..model, history:, interaction: Idle(hovered: None))
+      Model(history:, interaction: Idle(hovered: None))
     }
 
     UserClickedUndo, Idle(_) ->
       Model(
-        ..model,
         history: history_undo(model.history),
         interaction: Idle(hovered: None),
       )
 
     UserClickedRedo, Idle(_) ->
       Model(
-        ..model,
         history: history_redo(model.history),
         interaction: Idle(hovered: None),
       )
@@ -169,26 +174,44 @@ fn update_model(model: Model, msg: Msg) -> Model {
   }
 }
 
-fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
-  case dict.get(circles, id) {
-    Ok(circle) -> dict.insert(circles, id, Circle(..circle, diameter:))
-    Error(_) -> circles
+/// The id for the next circle: one more than the newest. Derived from the
+/// circles, so undoing a creation also frees its id.
+fn next_id(circles: Circles) -> CircleId {
+  case list.last(circles) {
+    Ok(#(CircleId(last), _)) -> CircleId(last + 1)
+    Error(_) -> CircleId(0)
   }
 }
 
-/// The circle nearest to `position` among those containing it.
+fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
+  list.map(circles, fn(entry) {
+    case entry.0 == id {
+      True -> #(id, Circle(..entry.1, diameter:))
+      False -> entry
+    }
+  })
+}
+
+/// The circle nearest to `position` among those containing it; of equally
+/// near ones, the topmost.
 fn circle_at(circles: Circles, position: Position) -> Option(CircleId) {
   circles
-  |> dict.to_list
   |> list.filter(fn(entry) { contains(entry.1, position) })
-  |> list.sort(fn(a, b) {
-    int.compare(
-      square_distance(a.1.center, position),
-      square_distance(b.1.center, position),
-    )
+  |> list.fold(None, fn(best: Option(#(CircleId, Circle)), entry) {
+    case best {
+      Some(current) ->
+        case
+          int.compare(
+            square_distance(entry.1.center, position),
+            square_distance(current.1.center, position),
+          )
+        {
+          order.Gt -> best
+          order.Lt | order.Eq -> Some(entry)
+        }
+      None -> Some(entry)
+    }
   })
-  |> list.first
-  |> option.from_result
   |> option.map(fn(entry) { entry.0 })
 }
 
@@ -219,11 +242,6 @@ fn history_new(present: a) -> History(a) {
 /// Records `present` as a new step, discarding any redoable steps.
 fn history_push(history: History(a), present: a) -> History(a) {
   History(past: [history.present, ..history.past], present:, future: [])
-}
-
-/// Replaces the present state without recording a step.
-fn history_replace(history: History(a), present: a) -> History(a) {
-  History(..history, present:)
 }
 
 fn history_undo(history: History(a)) -> History(a) {
@@ -307,8 +325,10 @@ fn view_menu(model: Model) -> Element(Msg) {
 
 fn view_dialog(model: Model) -> Element(Msg) {
   let adjusting = case model.interaction {
-    Adjusting(id, _) ->
-      dict.get(model.history.present, id) |> option.from_result
+    Adjusting(id, diameter) ->
+      list.key_find(model.history.present, id)
+      |> result.map(fn(circle) { Circle(..circle, diameter:) })
+      |> option.from_result
     _ -> None
   }
 
@@ -325,8 +345,8 @@ fn view_dialog(model: Model) -> Element(Msg) {
         ),
         html.input([
           attribute.type_("range"),
-          attribute.min("4"),
-          attribute.max("200"),
+          attribute.min(int.to_string(min_diameter)),
+          attribute.max(int.to_string(max_diameter)),
           attribute.value(int.to_string(diameter)),
           event.on("input", diameter_decoder()),
         ]),
@@ -350,12 +370,19 @@ fn view_circles(model: Model) -> List(Element(Msg)) {
     MenuOpen(id) | Adjusting(id, _) -> Some(id)
   }
 
-  model.history.present
-  |> dict.to_list
+  displayed_circles(model)
   |> list.map(fn(entry) {
     let #(id, circle) = entry
     view_circle(circle, highlighted == Some(id))
   })
+}
+
+/// The circles as shown: the one being adjusted has its preview diameter.
+fn displayed_circles(model: Model) -> Circles {
+  case model.interaction {
+    Adjusting(id, diameter) -> set_diameter(model.history.present, id, diameter)
+    Idle(_) | MenuOpen(_) -> model.history.present
+  }
 }
 
 fn view_circle(circle: Circle, highlighted: Bool) -> Element(Msg) {
