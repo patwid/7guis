@@ -12,7 +12,7 @@ import lustre/event
 
 pub fn main() {
   let app = lustre.application(init, update, view)
-  let assert Ok(_) = lustre.start(app, "#app", Nil)
+  let assert Ok(_) = lustre.start(app, "#app", now())
 
   Nil
 }
@@ -39,12 +39,14 @@ const step_ms = 100
 
 const max_duration_ms = 30_000
 
-fn init(_: flags) -> #(Model, Effect(Msg)) {
+/// Starts measuring at `started`, which `main` reads from the clock, so that
+/// `init` needs no access to the current time.
+fn init(started: Instant) -> #(Model, Effect(Msg)) {
   #(
     Model(
       elapsed: duration.milliseconds(0),
       duration: duration.seconds(15),
-      last_tick: instant_from_ms(do_now()),
+      last_tick: started,
     ),
     every(tick_ms, TimerTicked),
   )
@@ -58,6 +60,10 @@ fn every(interval: Int, to_msg: fn(Instant) -> Msg) -> Effect(Msg) {
 
 @external(javascript, "./timer.ffi.mjs", "every")
 fn do_every(interval: Int, cb: fn(Float) -> Nil) -> Nil
+
+fn now() -> Instant {
+  instant_from_ms(do_now())
+}
 
 @external(javascript, "./timer.ffi.mjs", "now")
 fn do_now() -> Float
