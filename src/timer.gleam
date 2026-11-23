@@ -60,10 +60,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     UserUpdatedDuration(duration) -> {
       let duration = clamp_duration(duration)
-      #(
-        Model(elapsed: min(model.elapsed, duration), duration:),
-        effect.none(),
-      )
+      #(Model(elapsed: min(model.elapsed, duration), duration:), effect.none())
     }
 
     UserResetTimer -> #(

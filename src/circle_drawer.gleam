@@ -369,8 +369,7 @@ fn view_dialog(model: Model) -> Element(Msg) {
 
 fn view_circles(model: Model) -> List(Element(Msg)) {
   let highlighted = case model.interaction {
-    Idle(pointer:) ->
-      option.then(pointer, circle_at(model.history.present, _))
+    Idle(pointer:) -> option.then(pointer, circle_at(model.history.present, _))
     MenuOpen(id) | Adjusting(id, _) -> Some(id)
   }
 
