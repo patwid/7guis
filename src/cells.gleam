@@ -295,12 +295,16 @@ fn format_value(value: Value) -> #(String, List(#(String, String))) {
   }
 }
 
+/// Rounds to two decimals and drops a zero fraction, so values read `0.3` and
+/// `3` rather than `0.30000000000000004` and `3.0`. Only the display is
+/// rounded; dependent cells compute with the exact value.
 fn format_number(n: Float) -> String {
-  // Display as integer if it's a whole number
-  let rounded = float.truncate(n)
-  case int.to_float(rounded) == n {
-    True -> int.to_string(rounded)
-    False -> float.to_string(n)
+  let rounded = float.to_precision(n, 2)
+  let whole = float.truncate(rounded)
+
+  case int.to_float(whole) == rounded {
+    True -> int.to_string(whole)
+    False -> float.to_string(rounded)
   }
 }
 
