@@ -466,9 +466,11 @@ fn view_circle(circle: Circle, highlighted: Bool) -> Element(Msg) {
 
 // --- Event decoders ---
 
+/// Browsers may report fractional offsets; circles live on whole pixels.
 fn position_decoder() -> Decoder(Position) {
-  use x <- decode.field("offsetX", decode.int)
-  use y <- decode.field("offsetY", decode.int)
+  let pixel = decode.float |> decode.map(float.round)
+  use x <- decode.field("offsetX", pixel)
+  use y <- decode.field("offsetY", pixel)
   decode.success(Position(x:, y:))
 }
 
