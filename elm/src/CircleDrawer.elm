@@ -1,7 +1,6 @@
-module CircleDrawer exposing (main)
+port module CircleDrawer exposing (main)
 
 import Browser
-import Browser.Events
 import Html exposing (Html)
 import Html.Attributes as Attributes
 import Html.Events as Events
@@ -16,7 +15,7 @@ main =
         { init = init
         , update = update
         , view = view
-        , subscriptions = subscriptions
+        , subscriptions = \_ -> Sub.none
         }
 
 
@@ -134,7 +133,11 @@ type Msg
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    ( updateModel msg model, Cmd.none )
+    let
+        updated =
+            updateModel msg model
+    in
+    ( updated, syncDialogs model.interaction updated.interaction )
 
 
 {-| Dispatches on the interaction first, so each state lists every message it
@@ -194,17 +197,19 @@ updateIdle msg model =
         UserClickedRedo ->
             { model | history = historyRedo model.history }
 
+        -- The menu and the dialog fire their close events after the model has
+        -- already closed them; see `viewNativeDialog`.
+        UserClosedMenu ->
+            model
+
+        UserClosedDialog ->
+            model
+
         -- Only the menu and the dialog offer these.
         UserClickedAdjustDiameter ->
             model
 
         UserAdjustedDiameter _ ->
-            model
-
-        UserClosedMenu ->
-            model
-
-        UserClosedDialog ->
             model
 
 
@@ -239,6 +244,7 @@ updateMenuOpen target msg model =
         UserAdjustedDiameter _ ->
             model
 
+        -- Only the dialog offers this.
         UserClosedDialog ->
             model
 
@@ -286,6 +292,8 @@ updateAdjusting target diameter msg model =
         UserClickedAdjustDiameter ->
             model
 
+        -- The menu fires its close event after the model has already closed
+        -- it; see `viewNativeDialog`.
         UserClosedMenu ->
             model
 
@@ -420,22 +428,47 @@ historyCanRedo history =
 
 
 
--- SUBSCRIPTIONS
+-- DIALOGS
 
 
-{-| Escape closes the menu or the dialog, as it would a native modal dialog.
+{-| Opens (with `showModal`) or closes the native `<dialog>` with the given id;
+see `CircleDrawer.ports.js`.
 -}
-subscriptions : Model -> Sub Msg
-subscriptions model =
-    case model.interaction of
+port setDialogOpen : { id : String, open : Bool } -> Cmd msg
+
+
+{-| The id of the dialog an interaction shows, if any.
+-}
+openDialog : Interaction -> Maybe String
+openDialog interaction =
+    case interaction of
         Idle ->
-            Sub.none
+            Nothing
 
         MenuOpen _ ->
-            Browser.Events.onKeyDown (escapeDecoder UserClosedMenu)
+            Just menuId
 
         Adjusting _ _ ->
-            Browser.Events.onKeyDown (escapeDecoder UserClosedDialog)
+            Just dialogId
+
+
+{-| Opens and closes the native dialogs to follow the interaction, so that
+`update` never has to.
+-}
+syncDialogs : Interaction -> Interaction -> Cmd Msg
+syncDialogs before after =
+    if openDialog before == openDialog after then
+        Cmd.none
+
+    else
+        Cmd.batch
+            [ openDialog before
+                |> Maybe.map (\id -> setDialogOpen { id = id, open = False })
+                |> Maybe.withDefault Cmd.none
+            , openDialog after
+                |> Maybe.map (\id -> setDialogOpen { id = id, open = True })
+                |> Maybe.withDefault Cmd.none
+            ]
 
 
 
@@ -461,7 +494,7 @@ view model =
                 (Decode.map (\position -> ( UserRightClickedCanvas position, True )) positionDecoder)
             ]
             (viewCircles model)
-        , viewMenu model
+        , viewMenu
         , viewDialog model
         ]
 
@@ -471,36 +504,28 @@ viewButton label msg disabled =
     Html.button [ Attributes.disabled disabled, Events.onClick msg ] [ Html.text label ]
 
 
-viewMenu : Model -> Html Msg
-viewMenu model =
-    case model.interaction of
-        MenuOpen _ ->
-            viewModal menuId
-                UserClosedMenu
-                [ Html.div
-                    [ Events.onClick UserClickedAdjustDiameter
-                    , Attributes.style "cursor" "pointer"
-                    ]
-                    [ Html.text "Adjust diameter.." ]
-                ]
-
-        Idle ->
-            Html.text ""
-
-        Adjusting _ _ ->
-            Html.text ""
+viewMenu : Html Msg
+viewMenu =
+    viewNativeDialog menuId
+        UserClosedMenu
+        [ Html.div
+            [ Events.onClick UserClickedAdjustDiameter
+            , Attributes.style "cursor" "pointer"
+            ]
+            [ Html.text "Adjust diameter.." ]
+        ]
 
 
 viewDialog : Model -> Html Msg
 viewDialog model =
-    case model.interaction of
-        Adjusting target diameter ->
-            let
-                center =
-                    target.circle.center
-            in
-            viewModal dialogId
-                UserClosedDialog
+    viewNativeDialog dialogId
+        UserClosedDialog
+        (case model.interaction of
+            Adjusting target diameter ->
+                let
+                    center =
+                        target.circle.center
+                in
                 [ Html.label []
                     [ Html.text
                         ("Adjust diameter of circle at ("
@@ -520,38 +545,26 @@ viewDialog model =
                     ]
                 ]
 
-        Idle ->
-            Html.text ""
+            Idle ->
+                []
 
-        MenuOpen _ ->
-            Html.text ""
+            MenuOpen _ ->
+                []
+        )
 
 
-{-| A modal box in the middle of a backdrop that covers the page, which makes
-everything behind it inert. Clicking the backdrop, outside the box, fires
-`onClose`.
+{-| A native `<dialog>`, which is always rendered; `syncDialogs` opens it as a
+modal, which makes everything behind it inert. Closing it in any way, by the
+model, by Escape or by clicking its backdrop, fires `onClose`.
 -}
-viewModal : String -> Msg -> List (Html Msg) -> Html Msg
-viewModal id onClose content =
-    Html.div
+viewNativeDialog : String -> Msg -> List (Html Msg) -> Html Msg
+viewNativeDialog id onClose content =
+    Html.node "dialog"
         [ Attributes.id id
-        , Attributes.style "position" "fixed"
-        , Attributes.style "inset" "0"
-        , Attributes.style "display" "flex"
-        , Attributes.style "align-items" "center"
-        , Attributes.style "justify-content" "center"
-        , Attributes.style "background" "rgba(0, 0, 0, 0.1)"
         , onBackdropClick id onClose
+        , Events.on "close" (Decode.succeed onClose)
         ]
-        [ Html.div
-            [ Attributes.attribute "role" "dialog"
-            , Attributes.attribute "aria-modal" "true"
-            , Attributes.style "background" "white"
-            , Attributes.style "border" "1px solid"
-            , Attributes.style "padding" "1rem"
-            ]
-            content
-        ]
+        content
 
 
 viewCircles : Model -> List (Svg Msg)
@@ -620,21 +633,9 @@ positionDecoder =
         (Decode.field "offsetY" (Decode.map round Decode.float))
 
 
-escapeDecoder : Msg -> Decoder Msg
-escapeDecoder msg =
-    Decode.field "key" Decode.string
-        |> Decode.andThen
-            (\key ->
-                if key == "Escape" then
-                    Decode.succeed msg
-
-                else
-                    Decode.fail "not Escape"
-            )
-
-
-{-| Fires `msg` only for clicks on the backdrop itself, not for clicks on the
-content of the modal.
+{-| Fires `msg` only for clicks on the dialog element itself (its backdrop),
+not for clicks on its content. The backdrop click itself does not close the
+dialog; the model does, which then fires its close event.
 -}
 onBackdropClick : String -> Msg -> Html.Attribute Msg
 onBackdropClick id msg =
@@ -646,6 +647,6 @@ onBackdropClick id msg =
                         Decode.succeed msg
 
                     else
-                        Decode.fail "click inside the modal"
+                        Decode.fail "click inside the dialog"
                 )
         )

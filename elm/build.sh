@@ -1,6 +1,8 @@
 #!/bin/sh
 # Build every task module in src/ into <outdir>/<task>/, where <task> is the
 # module name in snake_case (Counter -> counter, FlightBooker -> flight_booker).
+# A task's src/<Module>.ports.js, if any, is bundled with it; it defines
+# connectPorts(app), which the page calls with the started program.
 # Run inside the Elm dev shell: nix develop .#elm -c elm/build.sh <outdir>
 set -eu
 
@@ -16,6 +18,9 @@ for file in src/*.elm; do
   echo "Building elm task: $task"
   mkdir -p "$out/$task"
   elm make --optimize --output="$out/$task/elm.js" "$file"
+  if [ -f "src/$module.ports.js" ]; then
+    cat "src/$module.ports.js" >>"$out/$task/elm.js"
+  fi
   esbuild --minify --log-level=warning --allow-overwrite --outfile="$out/$task/$task.js" "$out/$task/elm.js"
   rm "$out/$task/elm.js"
   cat >"$out/$task/index.html" <<HTML
@@ -41,10 +46,11 @@ for file in src/*.elm; do
   <script>
     // Read the clock here, so that no program needs to in its init. Programs
     // that take no flags ignore them.
-    Elm.$module.init({
+    const app = Elm.$module.init({
       node: document.getElementById("elm"),
       flags: { now: Date.now(), zoneOffset: -new Date().getTimezoneOffset() },
     });
+    if (typeof connectPorts === "function") connectPorts(app);
   </script>
 </body>
 </html>

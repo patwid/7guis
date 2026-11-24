@@ -30,7 +30,8 @@ gleam check
 
 # Elm (run in elm/)
 elm reactor                                # dev server, open src/<Task>.elm (not timer and
-                                           # flight booker, which need flags; see build.sh)
+                                           # flight booker, which need flags, nor circle
+                                           # drawer, which needs ports; see build.sh)
 elm make src/<Task>.elm --output=/dev/null # type check
 elm-test                                   # tests in tests/
 elm-format --yes src tests
@@ -50,7 +51,7 @@ Entry point is `lustre.application()` or `lustre.simple()` depending on whether 
 
 **FFI (Gleam)**: Browser APIs not available in Gleam are accessed via `@external` declarations pointing to `.ffi.mjs` files (e.g., `timer.ffi.mjs` for `setInterval`, `circle_drawer.ffi.mjs` for dialog APIs).
 
-**Elm**: the same structure, with `Browser.sandbox` / `Browser.element` as entry points and ports in place of FFI.
+**Elm**: the same structure, with `Browser.sandbox` / `Browser.element` as entry points and ports in place of FFI: a task's `src/<Task>.ports.js` (e.g. `CircleDrawer.ports.js` for the dialog API) defines `connectPorts(app)`, which `elm/build.sh` bundles and calls.
 
 ## CI/CD
 
