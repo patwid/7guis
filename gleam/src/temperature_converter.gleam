@@ -1,5 +1,6 @@
 import gleam/float
 import gleam/int
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import lustre
@@ -15,10 +16,21 @@ pub fn main() {
   Nil
 }
 
-/// The text of both fields, exactly as shown. Numbers are parsed from it on
-/// demand, so the user's input is never reformatted while typing.
+/// Only the field the user last typed into holds their text, exactly as
+/// typed, so it is never reformatted while typing. The other field is derived
+/// from `last_valid`, so the two can never disagree.
+///
+/// `last_valid` is the last temperature entered, in degrees Celsius. It is
+/// kept while the input does not parse, as the specification requires: when
+/// the user enters a non-numerical string into one field, the other is not
+/// updated.
 type Model {
-  Model(celsius: String, fahrenheit: String)
+  Model(source: Scale, input: String, last_valid: Option(Float))
+}
+
+type Scale {
+  Celsius
+  Fahrenheit
 }
 
 /// The text of a field, parsed into a number of degrees.
@@ -29,37 +41,20 @@ type Input {
 }
 
 fn init(_: flags) -> Model {
-  Model(celsius: "", fahrenheit: "")
+  Model(source: Celsius, input: "", last_valid: None)
 }
 
 type Msg {
-  UserUpdatedCelsius(String)
-  UserUpdatedFahrenheit(String)
+  UserUpdatedTemperature(Scale, String)
 }
 
 fn update(model: Model, msg: Msg) -> Model {
-  // The specification requires: When the user enters a non-numerical
-  // string into TC the value in TF is not updated and vice versa.
   case msg {
-    UserUpdatedCelsius(text) ->
-      case parse(text) {
-        Valid(celsius) ->
-          Model(
-            celsius: text,
-            fahrenheit: format_number(to_fahrenheit(celsius)),
-          )
-        Empty | Invalid -> Model(..model, celsius: text)
-      }
-
-    UserUpdatedFahrenheit(text) ->
-      case parse(text) {
-        Valid(fahrenheit) ->
-          Model(
-            celsius: format_number(to_celsius(fahrenheit)),
-            fahrenheit: text,
-          )
-        Empty | Invalid -> Model(..model, fahrenheit: text)
-      }
+    UserUpdatedTemperature(scale, text) ->
+      Model(source: scale, input: text, last_valid: case parse(text) {
+        Valid(degrees) -> Some(to_celsius(scale, degrees))
+        Empty | Invalid -> model.last_valid
+      })
   }
 }
 
@@ -80,12 +75,18 @@ fn parse_number(text: String) -> Result(Float, Nil) {
   |> result.lazy_or(fn() { int.parse(text) |> result.map(int.to_float) })
 }
 
-fn to_celsius(fahrenheit: Float) -> Float {
-  { fahrenheit -. 32.0 } *. { 5.0 /. 9.0 }
+fn to_celsius(scale: Scale, degrees: Float) -> Float {
+  case scale {
+    Celsius -> degrees
+    Fahrenheit -> { degrees -. 32.0 } *. { 5.0 /. 9.0 }
+  }
 }
 
-fn to_fahrenheit(celsius: Float) -> Float {
-  celsius *. { 9.0 /. 5.0 } +. 32.0
+fn from_celsius(scale: Scale, celsius: Float) -> Float {
+  case scale {
+    Celsius -> celsius
+    Fahrenheit -> celsius *. { 9.0 /. 5.0 } +. 32.0
+  }
 }
 
 /// Rounds to two decimals and drops a zero fraction, so conversions read
@@ -102,20 +103,20 @@ fn format_number(n: Float) -> String {
 
 fn view(model: Model) -> Element(Msg) {
   html.div([attribute.class("row")], [
-    view_temperature_input(
-      value: model.celsius,
-      invalid: is_invalid(model.celsius),
-      label: "Celsius",
-      on_input: UserUpdatedCelsius,
-    ),
+    view_temperature_input(model, Celsius, label: "Celsius"),
     html.text(" = "),
-    view_temperature_input(
-      value: model.fahrenheit,
-      invalid: is_invalid(model.fahrenheit),
-      label: "Fahrenheit",
-      on_input: UserUpdatedFahrenheit,
-    ),
+    view_temperature_input(model, Fahrenheit, label: "Fahrenheit"),
   ])
+}
+
+/// The text of a field: as typed for the field being edited, else the last
+/// valid temperature converted to its scale.
+fn field_text(model: Model, scale: Scale) -> String {
+  case model.source == scale, model.last_valid {
+    True, _ -> model.input
+    False, Some(celsius) -> format_number(from_celsius(scale, celsius))
+    False, None -> ""
+  }
 }
 
 fn is_invalid(text: String) -> Bool {
@@ -126,12 +127,13 @@ fn is_invalid(text: String) -> Bool {
 }
 
 fn view_temperature_input(
-  value value: String,
-  invalid invalid: Bool,
+  model: Model,
+  scale: Scale,
   label label: String,
-  on_input handle_input: fn(String) -> Msg,
 ) -> Element(Msg) {
-  let styles = case invalid {
+  let value = field_text(model, scale)
+
+  let styles = case is_invalid(value) {
     False -> [#("width", "6em")]
     True -> [
       #("width", "6em"),
@@ -145,7 +147,7 @@ fn view_temperature_input(
     html.input([
       attribute.styles(styles),
       attribute.value(value),
-      event.on_input(handle_input),
+      event.on_input(UserUpdatedTemperature(scale, _)),
     ]),
     html.text(" " <> label),
   ])
