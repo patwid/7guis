@@ -11,8 +11,8 @@ import Time
 main : Program Flags Model Msg
 main =
     Browser.element
-        { init = init
-        , update = update
+        { init = \flags -> ( init flags, Cmd.none )
+        , update = \msg model -> ( update msg model, Cmd.none )
         , view = view
         , subscriptions = \_ -> Sub.none
         }
@@ -79,15 +79,13 @@ type alias Flags =
 {-| Starts with both dates set to today, the user's local date, which the page
 reads from the clock, so that `init` needs no access to the current time.
 -}
-init : Flags -> ( Model, Cmd Msg )
+init : Flags -> Model
 init { now, zoneOffset } =
     let
         today =
             formatDate (dateIn (Time.customZone zoneOffset []) (Time.millisToPosix now))
     in
-    ( { flight = OneWay, start = today, return = today, booked = Nothing }
-    , Cmd.none
-    )
+    { flight = OneWay, start = today, return = today, booked = Nothing }
 
 
 dateIn : Time.Zone -> Time.Posix -> Date
@@ -105,13 +103,8 @@ type Msg
     | UserClickedBook
 
 
-update : Msg -> Model -> ( Model, Cmd Msg )
+update : Msg -> Model -> Model
 update msg model =
-    ( updateModel msg model, Cmd.none )
-
-
-updateModel : Msg -> Model -> Model
-updateModel msg model =
     case msg of
         UserSelectedFlight flight ->
             { model | flight = flight, booked = Nothing }

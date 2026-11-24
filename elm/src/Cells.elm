@@ -14,7 +14,7 @@ import Task
 main : Program () Model Msg
 main =
     Browser.element
-        { init = init
+        { init = \_ -> ( init, Cmd.none )
         , update = update
         , view = view
         , subscriptions = \_ -> Sub.none
@@ -62,9 +62,9 @@ type Msg
     | EditorFocused
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
-    ( { sheet = Sheet.new, editor = Nothing }, Cmd.none )
+init : Model
+init =
+    { sheet = Sheet.new, editor = Nothing }
 
 
 editorId : String

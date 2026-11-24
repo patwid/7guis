@@ -12,7 +12,7 @@ import Svg.Attributes
 main : Program () Model Msg
 main =
     Browser.element
-        { init = init
+        { init = \_ -> ( init, Cmd.none )
         , update = update
         , view = view
         , subscriptions = \_ -> Sub.none
@@ -107,11 +107,9 @@ dialogId =
     "dialog"
 
 
-init : () -> ( Model, Cmd Msg )
-init _ =
-    ( { history = historyNew [], interaction = Idle, pointer = Nothing }
-    , Cmd.none
-    )
+init : Model
+init =
+    { history = historyNew [], interaction = Idle, pointer = Nothing }
 
 
 
