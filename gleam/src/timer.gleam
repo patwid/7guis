@@ -1,6 +1,6 @@
-import gleam/dynamic/decode.{type Decoder}
 import gleam/float
 import gleam/int
+import gleam/result
 import lustre
 import lustre/attribute
 import lustre/effect.{type Effect}
@@ -27,7 +27,7 @@ type Model {
 /// The resolution of the duration slider.
 const step_ms = 100
 
-const max_duration_ms = 30_000
+const max_duration_ms = 30_000.0
 
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(Model(elapsed: 0.0, duration: 15_000.0), start_ticking())
@@ -50,7 +50,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
     // Ticks are measured between real frame timestamps, so a background tab,
     // which gets no frames, catches up on its first frame back.
     TimerTicked(previous:, now:) -> {
-      let delta = float.max(0.0, now -. previous)
+      let delta = now -. previous
       let model =
         Model(
           ..model,
@@ -65,7 +65,7 @@ fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
 
     UserUpdatedDuration(duration) -> {
       let duration =
-        float.clamp(duration, min: 0.0, max: int.to_float(max_duration_ms))
+        float.clamp(duration, min: 0.0, max: max_duration_ms)
 
       resume(
         model,
@@ -128,22 +128,18 @@ fn view(model: Model) -> Element(Msg) {
       html.input([
         attribute.type_("range"),
         attribute.min("0"),
-        attribute.max(int.to_string(max_duration_ms)),
+        attribute.max(float.to_string(max_duration_ms)),
         attribute.step(int.to_string(step_ms)),
         attribute.value(float.to_string(model.duration)),
-        event.on("input", duration_decoder()),
+        event.on_input(fn(value) {
+          UserUpdatedDuration(int.parse(value)
+            |> result.map(int.to_float)
+            |> result.unwrap(model.duration))
+        }),
       ]),
     ]),
     html.button([event.on_click(UserClickedReset)], [html.text("Reset")]),
   ])
-}
-
-fn duration_decoder() -> Decoder(Msg) {
-  use value <- decode.subfield(["target", "value"], decode.string)
-  case int.parse(value) {
-    Ok(ms) -> decode.success(UserUpdatedDuration(int.to_float(ms)))
-    Error(_) -> decode.failure(UserUpdatedDuration(0.0), "duration")
-  }
 }
 
 /// Formats as seconds with one decimal, e.g. "12.3s".
