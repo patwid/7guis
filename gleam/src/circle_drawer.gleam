@@ -13,7 +13,7 @@ import lustre/element/svg
 import lustre/event
 
 pub fn main() {
-  let app = lustre.application(init, update, view)
+  let app = lustre.application(fn(_) { #(init(), effect.none()) }, update, view)
   let assert Ok(_) = lustre.start(app, "#app", Nil)
 
   Nil
@@ -75,11 +75,8 @@ const menu_id = "menu"
 
 const dialog_id = "dialog"
 
-fn init(_: flags) -> #(Model, Effect(Msg)) {
-  #(
-    Model(history: history_new([]), interaction: Idle, pointer: None),
-    effect.none(),
-  )
+fn init() -> Model {
+  Model(history: history_new([]), interaction: Idle, pointer: None)
 }
 
 // --- Update ---

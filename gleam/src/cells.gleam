@@ -51,14 +51,14 @@ type Msg {
 // --- Main / Init ---
 
 pub fn main() {
-  let app = lustre.application(init, update, view)
+  let app = lustre.application(fn(_) { #(init(), effect.none()) }, update, view)
   let assert Ok(_) = lustre.start(app, "#app", Nil)
 
   Nil
 }
 
-fn init(_: flags) -> #(Model, Effect(Msg)) {
-  #(Model(sheet: sheet.new(), editor: None), effect.none())
+fn init() -> Model {
+  Model(sheet: sheet.new(), editor: None)
 }
 
 // --- FFI ---
