@@ -21,10 +21,11 @@ type Model {
     people: People,
     /// Never reused, so an id always denotes the same person.
     next_id: PersonId,
-    /// A snapshot of the person the Update and Delete buttons act on. It
-    /// cannot go stale: `people` only changes through Create, Update and
-    /// Delete, which all clear the selection.
-    selected: Option(Entry),
+    /// The id of the person the Update and Delete buttons act on. It only
+    /// ever names a person who exists and is visible under the current
+    /// filter: Create, Update and Delete clear it, and so does a filter that
+    /// hides it.
+    selected: Option(PersonId),
     draft: Person,
     query: String,
   )
@@ -103,7 +104,7 @@ fn update(model: Model, msg: Msg) -> Model {
 
     UserSelectedPerson(id) ->
       case find_entry(model.people, id) {
-        Ok(entry) -> Model(..model, selected: Some(entry), draft: entry.person)
+        Ok(entry) -> Model(..model, selected: Some(id), draft: entry.person)
         Error(_) -> model
       }
 
@@ -114,7 +115,11 @@ fn update(model: Model, msg: Msg) -> Model {
 
     UserUpdatedQuery(query) -> {
       let selection_hidden = case model.selected {
-        Some(entry) -> !matches(entry.person, query)
+        Some(id) ->
+          case find_entry(model.people, id) {
+            Ok(entry) -> !matches(entry.person, query)
+            Error(_) -> False
+          }
         None -> False
       }
 
@@ -137,10 +142,10 @@ fn change_selected(
   change: fn(People, PersonId) -> People,
 ) -> Model {
   case model.selected {
-    Some(entry) ->
+    Some(id) ->
       Model(
         ..model,
-        people: change(model.people, entry.id),
+        people: change(model.people, id),
         selected: None,
         draft: empty_person,
       )
@@ -246,8 +251,6 @@ fn view_button(
 }
 
 fn view_person_options(model: Model) -> List(Element(Msg)) {
-  let selected_id = option.map(model.selected, fn(entry) { entry.id })
-
   visible_people(model)
   |> list.map(fn(entry) {
     let Entry(id:, person:) = entry
@@ -256,7 +259,7 @@ fn view_person_options(model: Model) -> List(Element(Msg)) {
     html.option(
       [
         attribute.value(int.to_string(value)),
-        attribute.selected(selected_id == Some(id)),
+        attribute.selected(model.selected == Some(id)),
       ],
       person.surname <> ", " <> person.name,
     )
