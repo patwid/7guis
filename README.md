@@ -1,46 +1,42 @@
 # 7GUIs
 
-[Gleam](https://gleam.run)/[Lustre](https://lustre.build) implementation of the [7GUIs](https://eugenkiss.github.io/7guis/) benchmark tasks, deployed to GitHub Pages: https://patwid.github.io/7guis/
+Implementations of the [7GUIs](https://eugenkiss.github.io/7guis/) benchmark tasks, deployed to GitHub Pages: https://patwid.github.io/7guis/
 
-Each task is an independent Lustre application in `src/`:
+- `gleam/`: [Gleam](https://gleam.run)/[Lustre](https://lustre.build), one Lustre application per task in `gleam/src/`
+- `elm/`: [Elm](https://elm-lang.org), one `Browser` program per task module in `elm/src/`
 
-- `counter`
-- `temperature_converter`
-- `flight_booker`
-- `timer`
-- `crud`
-- `circle_drawer`
-- `cells`
+Tasks: counter, temperature converter, flight booker, timer, CRUD, circle drawer, cells.
 
 ## Development Environment
 
-Requires Nix with flakes. Enter the dev shell with `nix develop` (or `direnv allow` for automatic loading). Provides: gleam, bun, nodejs, erlang, rebar3.
+Requires Nix with flakes. Each implementation has its own dev shell:
+
+- `nix develop .#gleam`: gleam, bun, nodejs, erlang, rebar3
+- `nix develop .#elm`: elm, elm-format, elm-test, esbuild
+- `nix develop` (or `direnv allow`): both combined
 
 ## Commands
 
 ```bash
-# Dev server with hot reload for a specific task
-gleam run -m lustre/dev start <task>       # e.g. gleam run -m lustre/dev start counter
-
-# Production build for a specific task
-gleam run -m lustre/dev build --minify --outdir="public/<task>" <task>
-
-# Build all tasks into public/ (plus an index page)
+# Build all implementations into public/<impl>/<task>/ (plus an index page);
+# enters each dev shell itself
 ./scripts/build.sh
 
-# Run tests
+# Gleam (run in gleam/)
+gleam run -m lustre/dev start <task>       # dev server, e.g. counter
 gleam test
-
-# Format code
 gleam format
-
-# Type check
 gleam check
+
+# Elm (run in elm/)
+elm reactor                                # dev server, open src/<Task>.elm
+elm make src/<Task>.elm --output=/dev/null # type check
+elm-format --yes src
 ```
 
 ## Architecture
 
-Each task follows Lustre's Elm Architecture (Model-View-Update):
+Each task follows the Elm Architecture, in Gleam via Lustre (Model-View-Update):
 
 - **Model**: immutable state type
 - **Msg**: union type of all possible messages
@@ -50,8 +46,10 @@ Each task follows Lustre's Elm Architecture (Model-View-Update):
 
 Entry point is `lustre.application()` or `lustre.simple()` depending on whether effects are needed.
 
-**FFI**: Browser APIs not available in Gleam are accessed via `@external` declarations pointing to `.ffi.mjs` files (e.g., `timer.ffi.mjs` for `setInterval`, `circle_drawer.ffi.mjs` for dialog APIs).
+**FFI (Gleam)**: Browser APIs not available in Gleam are accessed via `@external` declarations pointing to `.ffi.mjs` files (e.g., `timer.ffi.mjs` for `setInterval`, `circle_drawer.ffi.mjs` for dialog APIs).
+
+**Elm**: the same structure, with `Browser.sandbox` / `Browser.element` as entry points and ports in place of FFI.
 
 ## CI/CD
 
-GitHub Actions runs `scripts/build.sh` inside the Nix dev shell on every push and pull request. It builds every `src/*.gleam` task into `public/<task>/` and rewrites script paths to be relative so the pages work under the GitHub Pages subdirectory. Pushes to master then deploy `public/` to GitHub Pages.
+GitHub Actions runs `scripts/build.sh` on every push and pull request. It runs `gleam/build.sh` and `elm/build.sh`, each in its own dev shell, to build every task into `public/<impl>/<task>/` with relative script paths, so the pages work under the GitHub Pages subdirectory. It then writes `public/index.html` (a task × implementation table) and redirect pages at the old `public/<task>/` URLs. Pushes to master then deploy `public/` to GitHub Pages.

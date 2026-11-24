@@ -1,15 +1,18 @@
 # Gleam
 *.beam
 *.ez
-/build
+/gleam/build
 erl_crash.dump
+
+# Elm
+/elm/elm-stuff
 
 # Nix
 .direnv/
 
 #Added automatically by Lustre Dev Tools
-/.lustre
-/dist
+/gleam/.lustre
+/gleam/dist
 
 # CI build output
 /public
