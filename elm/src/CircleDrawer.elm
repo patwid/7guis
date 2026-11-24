@@ -1,5 +1,6 @@
 port module CircleDrawer exposing (main)
 
+import Array exposing (Array)
 import Browser
 import Html exposing (Html)
 import Html.Attributes as Attributes
@@ -35,22 +36,19 @@ type alias Model =
 
 
 {-| The circles in creation order, which is also the order they are drawn in
-(later circles on top). Ids increase along the list.
+(later circles on top). Circles are only ever appended, and undo and redo
+swap whole snapshots, so a circle's index identifies it.
 -}
 type alias Circles =
-    List Entry
+    Array Circle
 
 
-{-| A circle together with the id it is known by.
+{-| A circle together with its index in the circles.
 -}
 type alias Entry =
-    { id : CircleId
+    { index : Int
     , circle : Circle
     }
-
-
-type CircleId
-    = CircleId Int
 
 
 type alias Circle =
@@ -109,7 +107,7 @@ dialogId =
 
 init : Model
 init =
-    { history = historyNew [], interaction = Idle, pointer = Nothing }
+    { history = historyNew Array.empty, interaction = Idle, pointer = Nothing }
 
 
 
@@ -165,12 +163,10 @@ updateIdle msg model =
             case circleAt circles position of
                 Nothing ->
                     let
-                        entry =
-                            { id = nextId circles
-                            , circle = { center = position, diameter = defaultDiameter }
-                            }
+                        circle =
+                            { center = position, diameter = defaultDiameter }
                     in
-                    { model | history = historyPush (circles ++ [ entry ]) model.history }
+                    { model | history = historyPush (Array.push circle circles) model.history }
 
                 Just _ ->
                     model
@@ -263,7 +259,7 @@ updateAdjusting target diameter msg model =
 
                     else
                         historyPush
-                            (setDiameter target.id diameter model.history.present)
+                            (setDiameter target.index diameter model.history.present)
                             model.history
             in
             { model | history = history, interaction = Idle }
@@ -296,37 +292,14 @@ updateAdjusting target diameter msg model =
             model
 
 
-{-| The id for the next circle: one more than the newest. Derived from the
-circles, so undoing a creation also frees its id.
--}
-nextId : Circles -> CircleId
-nextId circles =
-    case List.reverse circles of
-        { id } :: _ ->
-            let
-                (CircleId last) =
-                    id
-            in
-            CircleId (last + 1)
+setDiameter : Int -> Int -> Circles -> Circles
+setDiameter index diameter circles =
+    case Array.get index circles of
+        Just circle ->
+            Array.set index { circle | diameter = diameter } circles
 
-        [] ->
-            CircleId 0
-
-
-setDiameter : CircleId -> Int -> Circles -> Circles
-setDiameter id diameter =
-    List.map
-        (\entry ->
-            if entry.id == id then
-                let
-                    circle =
-                        entry.circle
-                in
-                { entry | circle = { circle | diameter = diameter } }
-
-            else
-                entry
-        )
+        Nothing ->
+            circles
 
 
 {-| The circle nearest to `position` among those containing it; of equally
@@ -335,6 +308,8 @@ near ones, the topmost.
 circleAt : Circles -> Position -> Maybe Entry
 circleAt circles position =
     circles
+        |> Array.toIndexedList
+        |> List.map (\( index, circle ) -> { index = index, circle = circle })
         |> List.filter (\entry -> contains entry.circle position)
         |> List.foldl
             (\entry best ->
@@ -573,16 +548,17 @@ viewCircles model =
                 Idle ->
                     model.pointer
                         |> Maybe.andThen (circleAt model.history.present)
-                        |> Maybe.map .id
+                        |> Maybe.map .index
 
                 MenuOpen target ->
-                    Just target.id
+                    Just target.index
 
                 Adjusting target _ ->
-                    Just target.id
+                    Just target.index
     in
     displayedCircles model
-        |> List.map (\{ id, circle } -> viewCircle circle (highlighted == Just id))
+        |> Array.toIndexedList
+        |> List.map (\( index, circle ) -> viewCircle circle (highlighted == Just index))
 
 
 {-| The circles as shown: the one being adjusted has its preview diameter.
@@ -591,7 +567,7 @@ displayedCircles : Model -> Circles
 displayedCircles model =
     case model.interaction of
         Adjusting target diameter ->
-            setDiameter target.id diameter model.history.present
+            setDiameter target.index diameter model.history.present
 
         Idle ->
             model.history.present
