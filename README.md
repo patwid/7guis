@@ -49,7 +49,7 @@ Each task follows the Elm Architecture, in Gleam via Lustre (Model-View-Update):
 
 Entry point is `lustre.application()` or `lustre.simple()` depending on whether effects are needed.
 
-**FFI (Gleam)**: Browser APIs not available in Gleam are accessed via `@external` declarations pointing to `.ffi.mjs` files (e.g., `timer.ffi.mjs` for `setInterval`, `circle_drawer.ffi.mjs` for dialog APIs).
+**FFI (Gleam)**: Browser APIs not available in Gleam are accessed via `@external` declarations pointing to `.ffi.mjs` files (e.g., `timer.ffi.mjs` for `requestAnimationFrame`, `circle_drawer.ffi.mjs` for dialog APIs).
 
 **Elm**: the same structure, with `Browser.sandbox` / `Browser.element` as entry points and ports in place of FFI: a task's `src/<Task>.ports.js` (e.g. `CircleDrawer.ports.js` for the dialog API) defines `connectPorts(app)`, which `elm/build.sh` bundles and calls.
 
