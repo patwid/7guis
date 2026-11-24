@@ -3,7 +3,7 @@
 Implementations of the [7GUIs](https://eugenkiss.github.io/7guis/) benchmark tasks, deployed to GitHub Pages: https://patwid.github.io/7guis/
 
 - `gleam/`: [Gleam](https://gleam.run)/[Lustre](https://lustre.build), one Lustre application per task in `gleam/src/`
-- `elm/`: [Elm](https://elm-lang.org), one `Browser` program per task module in `elm/src/`
+- `elm/`: [Elm](https://elm-lang.org), one `Browser` program per task module in `elm/src/` (the cells task's helper modules live in `elm/src/Cells/`)
 
 Tasks: counter, temperature converter, flight booker, timer, CRUD, circle drawer, cells.
 
@@ -31,7 +31,8 @@ gleam check
 # Elm (run in elm/)
 elm reactor                                # dev server, open src/<Task>.elm
 elm make src/<Task>.elm --output=/dev/null # type check
-elm-format --yes src
+elm-test                                   # tests in tests/
+elm-format --yes src tests
 ```
 
 ## Architecture
