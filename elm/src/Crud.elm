@@ -14,15 +14,15 @@ main =
 
 {-| `nextId` is never reused, so an id always denotes the same person.
 
-`selected` is a snapshot of the person the Update and Delete buttons act on.
-It cannot go stale: `people` only changes through Create, Update and Delete,
-which all clear the selection.
+`selected` is the id of the person the Update and Delete buttons act on. It
+only ever names a person who exists and is visible under the current filter:
+Create, Update and Delete clear it, and so does a filter that hides it.
 
 -}
 type alias Model =
     { people : People
     , nextId : PersonId
-    , selected : Maybe Entry
+    , selected : Maybe PersonId
     , draft : Person
     , query : String
     }
@@ -113,7 +113,7 @@ update msg model =
         UserSelectedPerson id ->
             case findEntry model.people id of
                 Just entry ->
-                    { model | selected = Just entry, draft = entry.person }
+                    { model | selected = Just id, draft = entry.person }
 
                 Nothing ->
                     model
@@ -135,7 +135,7 @@ update msg model =
         UserUpdatedQuery query ->
             let
                 selectionHidden =
-                    case model.selected of
+                    case model.selected |> Maybe.andThen (findEntry model.people) of
                         Just entry ->
                             not (matches query entry.person)
 
@@ -158,9 +158,9 @@ buttons act on; without a selection, nothing happens.
 changeSelected : Model -> (PersonId -> People -> People) -> Model
 changeSelected model change =
     case model.selected of
-        Just entry ->
+        Just id ->
             { model
-                | people = change entry.id model.people
+                | people = change id model.people
                 , selected = Nothing
                 , draft = emptyPerson
             }
@@ -266,10 +266,6 @@ viewButton { label, onClick, enabled } =
 
 viewPersonOptions : Model -> List (Html Msg)
 viewPersonOptions model =
-    let
-        selectedId =
-            Maybe.map .id model.selected
-    in
     visiblePeople model
         |> List.map
             (\{ id, person } ->
@@ -279,7 +275,7 @@ viewPersonOptions model =
                 in
                 Html.option
                     [ Attributes.value (String.fromInt value)
-                    , Attributes.selected (selectedId == Just id)
+                    , Attributes.selected (model.selected == Just id)
                     ]
                     [ Html.text (person.surname ++ ", " ++ person.name) ]
             )
