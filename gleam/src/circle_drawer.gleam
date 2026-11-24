@@ -1,7 +1,6 @@
 import gleam/dynamic/decode.{type Decoder}
 import gleam/float
 import gleam/int
-import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
@@ -82,16 +81,9 @@ const dialog_id = "dialog"
 fn init(_: flags) -> #(Model, Effect(Msg)) {
   #(
     Model(history: history_new([]), interaction: Idle, pointer: None),
-    init_dialog(),
+    effect.none(),
   )
 }
-
-fn init_dialog() -> Effect(Msg) {
-  effect.from(fn(_) { do_init_dialog() })
-}
-
-@external(javascript, "./circle_drawer.ffi.mjs", "init_dialog")
-fn do_init_dialog() -> Nil
 
 // --- Update ---
 
@@ -109,7 +101,9 @@ type Msg {
 }
 
 fn update(model: Model, msg: Msg) -> #(Model, Effect(Msg)) {
-  #(update_model(model, msg), effect.none())
+  let updated = update_model(model, msg)
+
+  #(updated, sync_dialogs(model.interaction, updated.interaction))
 }
 
 /// Dispatches on the interaction first, so each state lists every message it
@@ -327,6 +321,42 @@ fn history_can_redo(history: History(a)) -> Bool {
   !list.is_empty(history.future)
 }
 
+// --- Dialogs ---
+
+/// The id of the dialog an interaction shows, if any.
+fn open_dialog(interaction: Interaction) -> Option(String) {
+  case interaction {
+    Idle -> None
+    MenuOpen(_) -> Some(menu_id)
+    Adjusting(..) -> Some(dialog_id)
+  }
+}
+
+/// Opens and closes the native dialogs to follow the interaction, so that
+/// `update_model` never has to.
+fn sync_dialogs(before: Interaction, after: Interaction) -> Effect(Msg) {
+  case open_dialog(before) == open_dialog(after) {
+    True -> effect.none()
+    False ->
+      effect.batch([
+        open_dialog(before)
+          |> option.map(set_dialog_open(_, False))
+          |> option.unwrap(effect.none()),
+        open_dialog(after)
+          |> option.map(set_dialog_open(_, True))
+          |> option.unwrap(effect.none()),
+      ])
+  }
+}
+
+/// Opens (with `showModal`) or closes the native `<dialog>` with the given id.
+fn set_dialog_open(id: String, open: Bool) -> Effect(Msg) {
+  effect.from(fn(_) { do_set_dialog_open(id, open) })
+}
+
+@external(javascript, "./circle_drawer.ffi.mjs", "set_dialog_open")
+fn do_set_dialog_open(id: String, open: Bool) -> Nil
+
 // --- View ---
 
 fn view(model: Model) -> Element(Msg) {
@@ -351,7 +381,7 @@ fn view(model: Model) -> Element(Msg) {
       ],
       view_circles(model),
     ),
-    view_menu(model),
+    view_menu(),
     view_dialog(model),
   ])
 }
@@ -362,16 +392,12 @@ fn button(label: String, msg: Msg, disabled: Bool) -> Element(Msg) {
   ])
 }
 
-fn view_menu(model: Model) -> Element(Msg) {
-  let open = case model.interaction {
-    MenuOpen(_) -> True
-    _ -> False
-  }
-
+/// The menu and the dialog are always rendered; `sync_dialogs` opens them as
+/// modals, which makes everything behind them inert.
+fn view_menu() -> Element(Msg) {
   html.dialog(
     [
       attribute.id(menu_id),
-      attribute.property("modalopen", json.bool(open)),
       on_backdrop_click(menu_id, UserClosedMenu),
       on_close(UserClosedMenu),
     ],
@@ -414,7 +440,6 @@ fn view_dialog(model: Model) -> Element(Msg) {
   html.dialog(
     [
       attribute.id(dialog_id),
-      attribute.property("modalopen", json.bool(option.is_some(adjusting))),
       on_backdrop_click(dialog_id, UserClosedDialog),
       on_close(UserClosedDialog),
     ],
