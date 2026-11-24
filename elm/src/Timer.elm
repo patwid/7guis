@@ -8,7 +8,7 @@ import Task
 import Time
 
 
-main : Program () Model Msg
+main : Program Flags Model Msg
 main =
     Browser.element
         { init = init
@@ -22,13 +22,21 @@ main =
 
 `measuredUntil` is the instant `elapsed` is measured up to; the next tick adds
 the time that really passed since, so late or throttled ticks (e.g. in a
-background tab) lose no time. It is `Nothing` until the clock has been read.
+background tab) lose no time.
 
 -}
 type alias Model =
     { elapsed : Int
     , duration : Int
-    , measuredUntil : Maybe Time.Posix
+    , measuredUntil : Time.Posix
+    }
+
+
+{-| `now` is the current time in milliseconds since the epoch (`Date.now()`),
+on the same clock as `Time.every`.
+-}
+type alias Flags =
+    { now : Int
     }
 
 
@@ -51,13 +59,13 @@ maxDurationMs =
     30000
 
 
-{-| Starts measuring as soon as the clock has been read, so that `init` needs
-no access to the current time.
+{-| Starts measuring at `now`, which the page reads from the clock, so that
+`init` needs no access to the current time.
 -}
-init : () -> ( Model, Cmd Msg )
-init _ =
-    ( { elapsed = 0, duration = 15000, measuredUntil = Nothing }
-    , readClock
+init : Flags -> ( Model, Cmd Msg )
+init { now } =
+    ( { elapsed = 0, duration = 15000, measuredUntil = Time.millisToPosix now }
+    , Cmd.none
     )
 
 
@@ -81,30 +89,24 @@ update msg model =
         -- Ticks keep moving `measuredUntil` even once the duration is reached,
         -- so a longer duration resumes from that moment rather than catching up.
         TimerTicked now ->
-            case model.measuredUntil of
-                Just measuredUntil ->
-                    let
-                        -- A tick stamped before a reset can still arrive after
-                        -- it; time must not run backwards then.
-                        until =
-                            latest measuredUntil now
+            let
+                -- A tick stamped before a reset can still arrive after it;
+                -- time must not run backwards then.
+                until =
+                    latest model.measuredUntil now
 
-                        elapsed =
-                            model.elapsed + timeBetween measuredUntil until
-                    in
-                    ( { model
-                        | elapsed = min elapsed model.duration
-                        , measuredUntil = Just until
-                      }
-                    , Cmd.none
-                    )
-
-                -- Nothing is measured before the clock has been read.
-                Nothing ->
-                    ( model, Cmd.none )
+                elapsed =
+                    model.elapsed + timeBetween model.measuredUntil until
+            in
+            ( { model
+                | elapsed = min elapsed model.duration
+                , measuredUntil = until
+              }
+            , Cmd.none
+            )
 
         TimerReset at ->
-            ( { model | elapsed = 0, measuredUntil = Just at }, Cmd.none )
+            ( { model | elapsed = 0, measuredUntil = at }, Cmd.none )
 
         UserUpdatedDuration duration ->
             let

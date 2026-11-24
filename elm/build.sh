@@ -38,7 +38,14 @@ for file in src/*.elm; do
 </head>
 <body>
   <div id="app"><div id="elm"></div></div>
-  <script>Elm.$module.init({ node: document.getElementById("elm") });</script>
+  <script>
+    // Read the clock here, so that no program needs to in its init. Programs
+    // that take no flags ignore them.
+    Elm.$module.init({
+      node: document.getElementById("elm"),
+      flags: { now: Date.now(), zoneOffset: -new Date().getTimezoneOffset() },
+    });
+  </script>
 </body>
 </html>
 HTML

@@ -5,11 +5,10 @@ import Html exposing (Html)
 import Html.Attributes as Attributes
 import Html.Events as Events
 import Json.Decode as Decode exposing (Decoder)
-import Task
 import Time
 
 
-main : Program () Model Msg
+main : Program Flags Model Msg
 main =
     Browser.element
         { init = init
@@ -67,13 +66,27 @@ type ReturnProblem
     | BeforeStart
 
 
-{-| Both dates start out as today, the user's local date, which is read from
-the clock right away.
+{-| `now` is the current time in milliseconds since the epoch (`Date.now()`),
+`zoneOffset` the user's offset from UTC in minutes
+(`-new Date().getTimezoneOffset()`).
 -}
-init : () -> ( Model, Cmd Msg )
-init _ =
-    ( { flight = OneWay, start = "", return = "", booked = Nothing }
-    , Task.perform ClockReadToday (Task.map2 dateIn Time.here Time.now)
+type alias Flags =
+    { now : Int
+    , zoneOffset : Int
+    }
+
+
+{-| Starts with both dates set to today, the user's local date, which the page
+reads from the clock, so that `init` needs no access to the current time.
+-}
+init : Flags -> ( Model, Cmd Msg )
+init { now, zoneOffset } =
+    let
+        today =
+            formatDate (dateIn (Time.customZone zoneOffset []) (Time.millisToPosix now))
+    in
+    ( { flight = OneWay, start = today, return = today, booked = Nothing }
+    , Cmd.none
     )
 
 
@@ -86,8 +99,7 @@ dateIn zone time =
 
 
 type Msg
-    = ClockReadToday Date
-    | UserSelectedFlight Flight
+    = UserSelectedFlight Flight
     | UserUpdatedStart String
     | UserUpdatedReturn String
     | UserClickedBook
@@ -101,13 +113,6 @@ update msg model =
 updateModel : Msg -> Model -> Model
 updateModel msg model =
     case msg of
-        ClockReadToday today ->
-            let
-                formatted =
-                    formatDate today
-            in
-            { model | start = formatted, return = formatted }
-
         UserSelectedFlight flight ->
             { model | flight = flight, booked = Nothing }
 

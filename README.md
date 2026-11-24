@@ -29,7 +29,8 @@ gleam format
 gleam check
 
 # Elm (run in elm/)
-elm reactor                                # dev server, open src/<Task>.elm
+elm reactor                                # dev server, open src/<Task>.elm (not timer and
+                                           # flight booker, which need flags; see build.sh)
 elm make src/<Task>.elm --output=/dev/null # type check
 elm-test                                   # tests in tests/
 elm-format --yes src tests
