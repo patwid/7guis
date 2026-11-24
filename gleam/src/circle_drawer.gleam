@@ -33,17 +33,14 @@ type Model {
 }
 
 /// The circles in creation order, which is also the order they are drawn in
-/// (later circles on top). Ids increase along the list.
+/// (later circles on top). Circles are only ever appended, and undo and redo
+/// swap whole snapshots, so a circle's index identifies it.
 type Circles =
-  List(Entry)
+  List(Circle)
 
-/// A circle together with the id it is known by.
+/// A circle together with its index in the circles.
 type Entry {
-  Entry(id: CircleId, circle: Circle)
-}
-
-type CircleId {
-  CircleId(Int)
+  Entry(index: Int, circle: Circle)
 }
 
 type Circle {
@@ -130,7 +127,7 @@ fn update_idle(model: Model, msg: Msg) -> Model {
             ..model,
             history: history_push(
               model.history,
-              list.append(circles, [Entry(id: next_id(circles), circle:)]),
+              list.append(circles, [circle]),
             ),
           )
         }
@@ -203,7 +200,7 @@ fn update_adjusting(
         False ->
           history_push(
             model.history,
-            set_diameter(model.history.present, target.id, diameter),
+            set_diameter(model.history.present, target.index, diameter),
           )
       }
 
@@ -225,20 +222,11 @@ fn update_adjusting(
   }
 }
 
-/// The id for the next circle: one more than the newest. Derived from the
-/// circles, so undoing a creation also frees its id.
-fn next_id(circles: Circles) -> CircleId {
-  case list.last(circles) {
-    Ok(Entry(id: CircleId(last), ..)) -> CircleId(last + 1)
-    Error(_) -> CircleId(0)
-  }
-}
-
-fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
-  list.map(circles, fn(entry) {
-    case entry.id == id {
-      True -> Entry(..entry, circle: Circle(..entry.circle, diameter:))
-      False -> entry
+fn set_diameter(circles: Circles, index: Int, diameter: Int) -> Circles {
+  list.index_map(circles, fn(circle, i) {
+    case i == index {
+      True -> Circle(..circle, diameter:)
+      False -> circle
     }
   })
 }
@@ -247,6 +235,7 @@ fn set_diameter(circles: Circles, id: CircleId, diameter: Int) -> Circles {
 /// near ones, the topmost.
 fn circle_at(circles: Circles, position: Position) -> Option(Entry) {
   circles
+  |> list.index_map(fn(circle, index) { Entry(index:, circle:) })
   |> list.filter(fn(entry) { contains(entry.circle, position) })
   |> list.fold(None, fn(best: Option(Entry), entry) {
     case best {
@@ -451,14 +440,13 @@ fn view_circles(model: Model) -> List(Element(Msg)) {
   let highlighted = case model.interaction {
     Idle ->
       option.then(model.pointer, circle_at(model.history.present, _))
-      |> option.map(fn(entry) { entry.id })
-    MenuOpen(target) | Adjusting(target, _) -> Some(target.id)
+      |> option.map(fn(entry) { entry.index })
+    MenuOpen(target) | Adjusting(target, _) -> Some(target.index)
   }
 
   displayed_circles(model)
-  |> list.map(fn(entry) {
-    let Entry(id:, circle:) = entry
-    view_circle(circle, highlighted == Some(id))
+  |> list.index_map(fn(circle, index) {
+    view_circle(circle, highlighted == Some(index))
   })
 }
 
@@ -466,7 +454,7 @@ fn view_circles(model: Model) -> List(Element(Msg)) {
 fn displayed_circles(model: Model) -> Circles {
   case model.interaction {
     Adjusting(target, diameter) ->
-      set_diameter(model.history.present, target.id, diameter)
+      set_diameter(model.history.present, target.index, diameter)
     Idle | MenuOpen(_) -> model.history.present
   }
 }
